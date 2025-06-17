@@ -1,0 +1,31 @@
+# file_version_info.txt
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040704b0',
+        [
+        StringStruct('CompanyName', 'Signz-vision.de'),
+        StringStruct('FileDescription', 'Ersatzteilkatalog-Generator'),
+        StringStruct('FileVersion', '1.0.0.0'),
+        StringStruct('InternalName', 'Ersatzteilkatalog-Generator'),
+        StringStruct('LegalCopyright', 'Copyright (C) 2024 Marcus Kohtz'),
+        StringStruct('OriginalFilename', 'generator.exe'),
+        StringStruct('ProductName', 'Ersatzteilkatalog-Generator'),
+        StringStruct('ProductVersion', '1.0.0.0')
+        ])
+      ]),
+    VarFileInfo([VarStruct('Translation', [1031, 1200])])
+  ]
+)
