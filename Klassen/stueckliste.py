@@ -29,16 +29,14 @@ class Stueckliste:
     ist dafür verantwortlich, die Daten aus der Datei zu laden und in eine
     strukturierte, programminterne Form zu überführen.
     """
-    def __init__(self, filepath: str, config_manager):
+    def __init__(self, filepath: str):
         """
         Initialisiert ein Stueckliste-Objekt.
 
         Args:
             filepath (str): Der vollständige Pfad zur Excel-Datei (.xlsm/.xlsx).
-            config_manager: Der ConfigManager für die Konfiguration.
         """
         self.filepath = filepath
-        self.config = config_manager
         # --- Instanzvariablen für die Metadaten der Stückliste ---
         self.titel = None
         self.zusatzbenennung = None
@@ -61,24 +59,22 @@ class Stueckliste:
         print(f"  [DEBUG] Lese Datei: {os.path.basename(self.filepath)}")
         try:
             # --- Phase 1: Header-Daten auslesen ---
-            col_indices = self.config.get_column_indices()
-
             workbook = openpyxl.load_workbook(self.filepath, data_only=True)
             if 'Import' not in workbook.sheetnames:
                 print("    [WARNUNG] Tabellenblatt 'Import' nicht gefunden.")
                 return
 
             sheet = workbook['Import']
-            self.titel = sheet[self.config.get_header_cell('titel')].value
+            self.titel = sheet['D2'].value
 
             # Bereinige die Haupt-Zeichnungsnummer direkt beim Einlesen, um
             # Konsistenz im gesamten Programm sicherzustellen.
-            raw_znr = str(sheet[self.config.get_header_cell('zeichnungsnummer')].value or '')
+            raw_znr = str(sheet['G2'].value or '')
             self.zeichnungsnummer = raw_znr.split('(')[0].strip().replace(' ', '')
             
-            self.zusatzbenennung = sheet[self.config.get_header_cell('zusatzbenennung')].value
-            self.kundennummer = sheet[self.config.get_header_cell('kundennummer')].value
-            self.verwendung = sheet[self.config.get_header_cell('verwendung')].value
+            self.zusatzbenennung = sheet['D3'].value
+            self.kundennummer = sheet['N3'].value
+            self.verwendung = sheet['J2'].value
 
             # --- Phase 2: Positionsdaten mit Pandas einlesen ---
             df_items = pd.read_excel(
@@ -87,12 +83,9 @@ class Stueckliste:
             df_items.dropna(how='all', inplace=True)
             print(f"    [DEBUG] Rohdaten geladen: {len(df_items)} Zeilen")
 
-            pos_col = col_indices['POS']
-            type_col = col_indices['Teileart']
-
             # --- Phase 3: Filtern der Positionsdaten ---
             # Stellt sicher, dass die Datei die Mindestanzahl an Spalten hat.
-            if df_items.shape[1] <= max(pos_col, type_col):
+            if df_items.shape[1] < 13:
                 print("    [WARNUNG] Nicht genügend Spalten für die Verarbeitung.")
                 return
 
@@ -104,19 +97,24 @@ class Stueckliste:
 
             # --- Phase 4: Daten extrahieren und aufbereiten ---
             # Definiere, welche Spalte welchen internen Namen bekommen soll.
+            spalten_mapping = {
+                'POS': 0, 'Menge_val': 1, 'Einheit': 2, 'Benennung': 3,
+                'Zusatzbenennung': 4, 'Norm': 5, 'Abmessung': 6,
+                'Teilenummer': 9, 'Hersteller': 10, 'Hersteller_Nr': 11,
+                'AFPS': 15
+            }
             
             # Konvertiere die gefilterten Reihen in eine Liste von Dictionaries.
             # Dieser Ansatz ist robuster als der direkte Zugriff auf Spalten.
             processed_positions = []
             for index, row in df_items.iterrows():
                 pos_dict = {}
-                for name, col_idx in col_indices.items():
+                for name, col_idx in spalten_mapping.items():
                     pos_dict[name] = row.get(col_idx, '')
                 processed_positions.append(pos_dict)
 
             if not processed_positions:
-                self.is_loaded = True
-                return
+                self.is_loaded = True; return
 
             df_final = pd.DataFrame(processed_positions).fillna('')
 
@@ -168,18 +166,16 @@ class Stueckliste:
 
 class BomProcessor:
     """Verwaltet einen Stapel von Stücklisten-Objekten."""
-    def __init__(self, folder_path: str, config_manager):
+    
+    def __init__(self, folder_path: str):
         """
         Initialisiert den Prozessor.
 
         Args:
             folder_path (str): Der Pfad zum Ordner, der die Excel-Dateien enthält.
-            config_manager: Der ConfigManager für die Konfiguration.
         """
         self.folder_path = folder_path
         self.boms = {}  # Dictionary, um ZN auf Stueckliste-Objekte zu mappen
-        self.config = config_manager # Speichere den ConfigManager
-        self.config = config_manager # Speichere den ConfigManager
 
     def run(self):
         """Führt den gesamten Prozess aus: Einlesen und Verknüpfen."""
@@ -195,7 +191,7 @@ class BomProcessor:
             # Ignoriert temporäre Excel-Dateien, die mit '~' beginnen.
             if filename.lower().endswith((".xlsm", ".xlsx")) and not filename.startswith('~'):
                 filepath = os.path.join(self.folder_path, filename)
-                bom = Stueckliste(filepath, config_manager=self.config)
+                bom = Stueckliste(filepath)
                 # Füge das Objekt nur hinzu, wenn es erfolgreich geladen wurde
                 # und eine gültige Zeichnungsnummer hat.
                 if bom.is_loaded and bom.zeichnungsnummer:
