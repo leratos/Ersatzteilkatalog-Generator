@@ -9,12 +9,22 @@ import sys
 import re
 from PIL import Image
 
+
 class DocxGenerator:
-    def __init__(self, data: dict, main_bom, author_name: str, template_path: str, output_path: str, auto_update_fields: bool, project_path: str):
+    def __init__(self, 
+                 data: dict, 
+                 main_bom,
+                 author_name: str,
+                 template_path: str,
+                 output_path: str,
+                 auto_update_fields: bool,
+                 project_path: str,
+                 config_manager):
         self.data = data; self.main_bom = main_bom; self.author_name = author_name
         self.template_path = template_path; self.output_path = output_path
         self.auto_update_fields = auto_update_fields
         self.project_path = project_path
+        self.config = config_manager
         self.doc = Document(self.template_path)
 
     def run(self) -> bool:
@@ -104,19 +114,21 @@ class DocxGenerator:
                 word.Quit()
 
     def _create_table_for_assembly(self, items):
-        """Creates table and inserts page reference PLACEHOLDERS."""
-        headers = ['Pos.', 'Menge', 'Benennung', 'Bestellnummer', 'Information', 'Seite']
+        """Erstellt die Tabelle dynamisch basierend auf der Konfiguration."""
+        output_columns = self.config.config.get("output_columns", [])
+        if not output_columns:
+            print("WARNUNG: Keine Ausgabespalten in der Konfiguration definiert.")
+            return
+
+        headers = [col["header"] for col in output_columns]
         table = self.doc.add_table(rows=1, cols=len(headers))
         table.style = 'Table Grid'
         
         hdr_cells = table.rows[0].cells
-        for i, header_text in enumerate(headers): 
-            cell = hdr_cells[i]
-            cell.text = header_text
-            cell.paragraphs[0].runs[0].font.bold = True
-        
         tr = table.rows[0]._tr
         trPr = tr.get_or_add_trPr(); tblHeader = OxmlElement('w:tblHeader'); trPr.append(tblHeader)
+        for i, header_text in enumerate(headers):
+            cell = hdr_cells[i]; cell.text = header_text; cell.paragraphs[0].runs[0].font.bold = True
         
         def get_pos_key(item):
             try: return float(item.get('POS', 0))
@@ -125,47 +137,67 @@ class DocxGenerator:
 
         for i, item in enumerate(sorted_items):
             row_cells = table.add_row().cells
-            row_cells[0].text = f"{item.get('POS', ''):g}"
-            row_cells[1].text = item.get('Menge', '')
-            self._add_multiline_text(row_cells[2], item.get('Benennung_Formatiert', ''))
-            row_cells[3].text = item.get('Bestellnummer_Kunde', '')
-            self._add_multiline_text(row_cells[4], item.get('Information', ''))
-            
-            if item.get('is_assembly'):
-                teilenummer_raw = str(item.get('Teilenummer', ''))
-                clean_znr = teilenummer_raw.split('(')[0].strip().replace(' ', '')
-                row_cells[5].text = f"[REF:{clean_znr}]"
-            else:
-                row_cells[5].text = ""
+            for col_idx, col_config in enumerate(output_columns):
+                data_id = col_config["id"]
+                cell_text = ""
+                
+                if data_id == "Seite":
+                    if item.get('is_assembly'):
+                        teilenummer_raw = str(item.get('Teilenummer', ''))
+                        clean_znr = teilenummer_raw.split('(')[0].strip().replace(' ', '')
+                        cell_text = f"[REF:{clean_znr}]"
+                elif data_id == "POS":
+                    pos_val = item.get(data_id, "")
+                    cell_text = f"{pos_val:g}" if pos_val != "" else ""
+                else:
+                    cell_text = item.get(data_id, "")
+                
+                self._add_multiline_text(row_cells[col_idx], cell_text)
 
             if (i % 2) != 0:
                 for cell in row_cells: self._set_cell_shading(cell, "DAE9F8")
 
-        col_widths = [Cm(1.2), Cm(2.0), Cm(5.1), Cm(3.8), Cm(3.8), Cm(1.3)]
+        col_widths = [Cm(col.get("width_cm", 2.5)) for col in output_columns]
         for i, width in enumerate(col_widths):
             for cell in table.columns[i].cells: cell.width = width
 
-    # Der Rest der Klasse bleibt unverändert.
     def _create_cover_sheet(self):
-        p_title = self.doc.add_paragraph(); p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run_title = p_title.add_run(self.main_bom.titel or "[TITEL]"); font_title = run_title.font; font_title.name = 'Calibri'; font_title.size = Cm(1.5); font_title.bold = True
-        p_line = self.doc.add_paragraph(); p_line.alignment = WD_ALIGN_PARAGRAPH.CENTER; p_line.add_run("_________________________________________________")
-        p_subject = self.doc.add_paragraph(); p_subject.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run_subject = p_subject.add_run("Ersatzteilkatalog"); run_subject.font.size = Cm(0.8)
-        p_grafik = self.doc.add_paragraph(); p_grafik.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_title = self.doc.add_paragraph()
+        p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_title = p_title.add_run(self.main_bom.titel or "[TITEL]")
+        font_title = run_title.font; font_title.name = 'Calibri'
+        font_title.size = Cm(1.5); font_title.bold = True
+        p_line = self.doc.add_paragraph()
+        p_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_line.add_run("_________________________________________________")
+        p_subject = self.doc.add_paragraph()
+        p_subject.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_subject = p_subject.add_run("Ersatzteilkatalog")
+        run_subject.font.size = Cm(0.8)
+        p_grafik = self.doc.add_paragraph()
+        p_grafik.alignment = WD_ALIGN_PARAGRAPH.CENTER
         image_path = None
         for ext in ['.png', '.jpg']:
             path = os.path.join(self.project_path, "Grafik", f"EL{ext}")
-            if os.path.exists(path): image_path = path; break
+            if os.path.exists(path):
+                image_path = path
+                break
         if image_path: self._add_scaled_picture(p_grafik, image_path, Cm(16), Cm(15))
         self.doc.add_page_break()
     def _create_toc(self):
         self.doc.add_heading("Inhaltsverzeichnis", level=1)
-        paragraph = self.doc.add_paragraph(); run = paragraph.add_run()
-        fldChar_begin = OxmlElement('w:fldChar'); fldChar_begin.set(qn('w:fldCharType'), 'begin')
-        instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve'); instrText.text = ' TOC \\o "1-3" \\h \\z \\u '
-        fldChar_end = OxmlElement('w:fldChar'); fldChar_end.set(qn('w:fldCharType'), 'end')
-        run._r.append(fldChar_begin); run._r.append(instrText); run._r.append(fldChar_end)
+        paragraph = self.doc.add_paragraph()
+        run = paragraph.add_run()
+        fldChar_begin = OxmlElement('w:fldChar')
+        fldChar_begin.set(qn('w:fldCharType'), 'begin')
+        instrText = OxmlElement('w:instrText')
+        instrText.set(qn('xml:space'), 'preserve')
+        instrText.text = ' TOC \\o "1-3" \\h \\z \\u '
+        fldChar_end = OxmlElement('w:fldChar')
+        fldChar_end.set(qn('w:fldCharType'), 'end')
+        run._r.append(fldChar_begin)
+        run._r.append(instrText)
+        run._r.append(fldChar_end)
         self.doc.add_page_break()
     def _add_scaled_picture(self, paragraph, image_path, max_width, max_height):
         try:
@@ -177,12 +209,15 @@ class DocxGenerator:
             if height_at_max_width > max_height: paragraph.add_run().add_picture(image_path, height=max_height)
             else: paragraph.add_run().add_picture(image_path, width=max_width)
         except Exception as e:
-            print(f"Bildfehler: {e}"); paragraph.add_run(f"[Bild {os.path.basename(image_path)} nicht ladbar]").italic = True
+            print(f"Bildfehler: {e}")
+            paragraph.add_run(f"[Bild {os.path.basename(image_path)} nicht ladbar]").italic = True
     def _replace_graphic_placeholders(self):
-        grafik_folder = os.path.join(self.project_path, "Grafik"); max_breite = Cm(16); max_hoehe = Cm(20)
+        grafik_folder = os.path.join(self.project_path, "Grafik")
+        max_breite = Cm(16); max_hoehe = Cm(20)
         for p in self.doc.paragraphs:
             if "[GRAFIK_PLATZHALTER_" in p.text:
-                znr = p.text.split('_')[-1].replace(']', ''); image_path = None
+                znr = p.text.split('_')[-1].replace(']', '')
+                image_path = None
                 for ext in ['.png', '.jpg', '.jpeg']:
                     path = os.path.join(grafik_folder, f"{znr}{ext}")
                     if os.path.exists(path): image_path = path; break
