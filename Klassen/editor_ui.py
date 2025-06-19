@@ -11,6 +11,7 @@ from PySide6 import QtWidgets, QtCore
 import openpyxl
 from openpyxl.utils import get_column_letter
 import re
+import time
 
 class ConfigEditorWindow(QtWidgets.QDialog):
     """
@@ -94,7 +95,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         
         item_header = QtWidgets.QTableWidgetItem(data.get("header", "Neue Spalte"))
         self.layout_table.setItem(row, 0, item_header)
-        item_header.setData(QtCore.Qt.ItemDataRole.UserRole, data.get("type", "custom"))
+        item_header.setData(QtCore.Qt.ItemDataRole.UserRole, data)
 
         source_id = data.get("source_id", "")
         if is_standard:
@@ -113,14 +114,19 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         spin_width.setValue(int(data.get("width_percent", 10)))
         self.layout_table.setCellWidget(row, 2, spin_width)
         
-        self.layout_table.item(row, 0).setData(QtCore.Qt.ItemDataRole.UserRole, data.get("type", "custom"))
 
     def _get_row_data(self, row):
         """Liest alle Daten aus einer Zeile der Layout-Tabelle."""
         header_item = self.layout_table.item(row, 0)
         if not header_item: return None
         
-        col_type = header_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        stored_data = header_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not isinstance(stored_data, dict):
+            # Fallback für den unwahrscheinlichen Fall, dass die Daten veraltet sind
+            stored_data = {"id": None, "type": "custom"}
+
+        col_type = stored_data.get("type")
+        col_id = stored_data.get("id") # Wichtig: Die ursprüngliche ID wird hier geholt.
         
         source_widget = self.layout_table.cellWidget(row, 1)
         source_id = ""
@@ -129,10 +135,11 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         elif isinstance(source_widget, QtWidgets.QLabel):
             match = re.search(r'<i>(.*?) \(Standard\)</i>', source_widget.text())
             if match: source_id = match.group(1)
-        
+
         width_widget = self.layout_table.cellWidget(row, 2)
         
         return {
+            "id": col_id, # Wichtig: Die ID wird in die neue Konfiguration übernommen.
             "header": header_item.text(),
             "width_percent": width_widget.value(),
             "source_id": source_id,
@@ -310,17 +317,28 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         row = self.layout_table.rowCount()
         self.layout_table.insertRow(row)
         available_ids = self._get_complete_source_ids()
-        self._create_row_widgets(row, {"type": "custom"}, available_ids)
+        new_id = f"custom_{int(time.time() * 1000)}"
+        new_col_data = {
+            "id": new_id,
+            "type": "custom",
+            "header": "Neue Spalte",
+            "width_percent": 15,
+            "source_id": ""
+        }
+        self._create_row_widgets(row, new_col_data, available_ids)
 
     def _remove_layout_row(self):
         row = self.layout_table.currentRow()
         if row >= 0:
             item = self.layout_table.item(row, 0)
-            if item and item.data(QtCore.Qt.ItemDataRole.UserRole) == "custom":
-                self.layout_table.removeRow(row)
-            else:
-                QtWidgets.QMessageBox.warning(self, "Fehler", "Standard-Spalten können nicht entfernt werden.")
-            
+            if item:
+                # ÄNDERUNG: Greife auf den 'type' im gespeicherten Dictionary zu.
+                stored_data = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                if isinstance(stored_data, dict) and stored_data.get("type") == "custom":
+                    self.layout_table.removeRow(row)
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Fehler", "Standard-Spalten können nicht entfernt werden.")
+
     def _move_row_up(self):
         """Bewegt die ausgewählte Zeile eine Position nach oben."""
         row = self.layout_table.currentRow()

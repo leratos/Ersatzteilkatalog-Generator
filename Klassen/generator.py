@@ -72,8 +72,6 @@ class DocxGenerator:
             if doc.TablesOfContents.Count > 0:
                 toc_text = doc.TablesOfContents(1).Range.Text
                 
-                # --- FINALE, ROBUSTE LOGIK: Regex, die den Kern der ZN extrahiert ---
-                # Sucht nach dem Muster XX.XXX-XX... und ignoriert alles danach
                 pattern = re.compile(r'\((\d{2}\.\d{3}-\d{1,3}(?:\.\d{1,3})?)(?:.*?)\)[\s\S]*?\t(\d+)')
 
                 matches = pattern.finditer(toc_text)
@@ -123,49 +121,59 @@ class DocxGenerator:
         headers = [col["header"] for col in output_columns]
         table = self.doc.add_table(rows=1, cols=len(headers))
         table.style = 'Table Grid'
-        table.width = Cm(16)
+        table.width = Cm(16.5)
         table.autofit = False
         table.allow_autofit = False
-        
+
         hdr_cells = table.rows[0].cells
         tr = table.rows[0]._tr
-        trPr = tr.get_or_add_trPr(); tblHeader = OxmlElement('w:tblHeader'); trPr.append(tblHeader)
+        trPr = tr.get_or_add_trPr()
+        tblHeader = OxmlElement('w:tblHeader')
+        trPr.append(tblHeader)
         for i, header_text in enumerate(headers):
-            cell = hdr_cells[i]; cell.text = header_text; cell.paragraphs[0].runs[0].font.bold = True
+            cell = hdr_cells[i]
+            cell.text = header_text
+            cell.paragraphs[0].runs[0].font.bold = True
         
-        def get_pos_key(item):
-            try: return float(item.get('POS', 0))
-            except (ValueError, TypeError): return float('inf')
-        sorted_items = sorted(items, key=get_pos_key)
+        sorted_items = sorted(items, key=lambda item: float(item.get('POS', 0)) if str(item.get('POS', '0')).replace('.','',1).isdigit() else float('inf'))
 
         for i, item in enumerate(sorted_items):
             row_cells = table.add_row().cells
             for col_idx, col_config in enumerate(output_columns):
-                data_id = col_config["id"]
-                cell_text = ""
+                source_id = col_config.get("source_id")
+                col_id = col_config.get("id")
+                key_for_data = source_id if source_id else col_id
                 
-                if data_id == "Seite":
-                    if item.get('is_assembly'):
+                cell_text = ""
+                if col_id == 'std_seite':
+                    if item.get('is_assembly', False) and item.get('Teilenummer'):
                         teilenummer_raw = str(item.get('Teilenummer', ''))
                         clean_znr = teilenummer_raw.split('(')[0].strip().replace(' ', '')
-                        cell_text = f"[REF:{clean_znr}]"
-                elif data_id == "POS":
-                    pos_val = item.get(data_id, "")
-                    cell_text = f"{pos_val:g}" if pos_val != "" else ""
+                        if clean_znr:
+                            cell_text = f"[REF:{clean_znr}]"
+                        else:
+                            cell_text = ""
                 else:
-                    cell_text = item.get(data_id, "")
+                    value = item.get(key_for_data, "")
+                    if key_for_data == 'POS' and isinstance(value, (int, float)):
+                        cell_text = f"{value:g}"
+                    else:
+                        cell_text = str(value)
                 
                 self._add_multiline_text(row_cells[col_idx], cell_text)
 
             if (i % 2) != 0:
-                for cell in row_cells: self._set_cell_shading(cell, "DAE9F8")
+                for cell in row_cells:
+                    self._set_cell_shading(cell, "DAE9F8")
 
-        total_percent = sum(col.get("width_percent", 10) for col in output_columns)
-        for i, col_config in enumerate(output_columns):
-            percent = col_config.get("width_percent", 10)
-            # Berechne den prozentualen Anteil der Spalte an der Gesamtbreite
-            # Die Gesamtbreite wird in "fiftieths of a percent" angegeben (also * 50)
-            table.columns[i].width = int(table.width * (percent / total_percent))
+        total_percent = sum(c.get("width_percent", 10) for c in output_columns)
+        if total_percent > 0:
+            for i, col_config in enumerate(output_columns):
+                percent = col_config.get("width_percent", 10)
+                col_width = int(table.width.cm * (percent / total_percent) * 360000)
+                for row in table.rows:
+                    row.cells[i].width = col_width
+                table.columns[i].width = col_width
 
     def _create_cover_sheet(self):
         p_title = self.doc.add_paragraph()
@@ -190,6 +198,7 @@ class DocxGenerator:
                 break
         if image_path: self._add_scaled_picture(p_grafik, image_path, Cm(16), Cm(15))
         self.doc.add_page_break()
+
     def _create_toc(self):
         self.doc.add_heading("Inhaltsverzeichnis", level=1)
         paragraph = self.doc.add_paragraph()
@@ -205,18 +214,25 @@ class DocxGenerator:
         run._r.append(instrText)
         run._r.append(fldChar_end)
         self.doc.add_page_break()
+
     def _add_scaled_picture(self, paragraph, image_path, max_width, max_height):
         try:
             img = Image.open(image_path)
             original_width_px, original_height_px = img.size
-            if original_width_px == 0: return
+            if original_width_px == 0 or original_height_px == 0: return
             aspect_ratio = float(original_height_px) / float(original_width_px)
+
+            # Berechne die resultierende Höhe bei maximaler Breite
             height_at_max_width = max_width * aspect_ratio
-            if height_at_max_width > max_height: paragraph.add_run().add_picture(image_path, height=max_height)
-            else: paragraph.add_run().add_picture(image_path, width=max_width)
+             # Entscheide, welche Dimension die begrenzende ist
+            if height_at_max_width > max_height:
+                paragraph.add_run().add_picture(image_path, height=max_height)
+            else:
+                paragraph.add_run().add_picture(image_path, width=max_width)
         except Exception as e:
             print(f"Bildfehler: {e}")
             paragraph.add_run(f"[Bild {os.path.basename(image_path)} nicht ladbar]").italic = True
+
     def _replace_graphic_placeholders(self):
         grafik_folder = os.path.join(self.project_path, "Grafik")
         max_breite = Cm(16); max_hoehe = Cm(20)
@@ -230,6 +246,7 @@ class DocxGenerator:
                 p.clear() 
                 if image_path: self._add_scaled_picture(p, image_path, max_breite, max_hoehe)
                 else: p.add_run("[Keine Grafik zugeordnet]").italic = True
+
     def _update_header_footer(self):
         title = self.main_bom.titel or ""; zusatz = self.main_bom.zusatzbenennung or ""; full_title = f"{title} - {zusatz}".strip(' -')
         zeich_nr = self.main_bom.kundennummer or self.main_bom.zeichnungsnummer or ""; full_zeich_nr = f"{zeich_nr} (EL)"
@@ -242,31 +259,44 @@ class DocxGenerator:
                         for row in table.rows:
                             for cell in row.cells:
                                 for p in cell.paragraphs:
-                                    for run in p.runs:
+                                    inline = p.runs
+                                    for i in range(len(inline)):
                                         for key, value in replacements.items():
-                                            if key in run.text: run.text = run.text.replace(key, str(value))
+                                            if key in inline[i].text:
+                                                inline[i].text = inline[i].text.replace(key, str(value))
                     for p in part.paragraphs: 
                         for run in p.runs:
                             for key, value in replacements.items():
-                                if key in run.text: run.text = run.text.replace(key, str(value))
+                                if key in run.text:
+                                    run.text = run.text.replace(key, str(value))
+
     def _create_assembly_section(self, assembly_data):
         if not assembly_data: return
-        title = f"{assembly_data.get('Benennung', '')} ({assembly_data.get('Teilenummer', '')})"; heading = self.doc.add_heading(title, level=1)
+        title = f"{assembly_data.get('Benennung', '')} ({assembly_data.get('Teilenummer', '')})"
+        heading = self.doc.add_heading(title, level=1)
         heading.paragraph_format.keep_with_next = True
         styles = self.doc.styles
         if 'Überschrift 1' in styles: heading.style = styles['Überschrift 1']
         elif 'Heading 1' in styles: heading.style = styles['Heading 1']
-        p_grafik = self.doc.add_paragraph(); run = p_grafik.add_run(); run.text = f"[GRAFIK_PLATZHALTER_{assembly_data.get('Teilenummer')}]"; p_grafik.paragraph_format.keep_with_next = True
+        p_grafik = self.doc.add_paragraph()
+        run = p_grafik.add_run()
+        run.text = f"[GRAFIK_PLATZHALTER_{assembly_data.get('Teilenummer')}]"; p_grafik.paragraph_format.keep_with_next = True
         self.doc.add_paragraph() 
-        if assembly_data.get('children'): self._create_table_for_assembly(assembly_data.get('children'))
+        if assembly_data.get('children'):
+            self._create_table_for_assembly(assembly_data.get('children'))
         self.doc.add_page_break()
         for child in assembly_data.get('children', []):
-            if child.get('is_assembly'): self._create_assembly_section(child)
+            if child.get('is_assembly'):
+                self._create_assembly_section(child)
+
     def _add_multiline_text(self, cell, text):
-        cell.text = ''; p = cell.paragraphs[0]; lines = str(text).split('\n')
+        cell.text = ''; p = cell.paragraphs[0]
+        lines = str(text).split('\n')
         for i, line in enumerate(lines):
             if i > 0: p.add_run().add_break()
             p.add_run(line)
     def _set_cell_shading(self, cell, fill_color):
-        tc_pr = cell._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd'); shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), fill_color); tc_pr.append(shd)
+        tc_pr = cell._tc.get_or_add_tcPr(); shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear'); shd.set(qn('w:fill'), fill_color)
+        tc_pr.append(shd)
 
