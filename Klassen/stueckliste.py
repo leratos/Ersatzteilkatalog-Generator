@@ -154,6 +154,14 @@ class Stueckliste:
             df_final['Bestellnummer_Kunde'] = df_final.apply(get_bestellnummer, axis=1)
             df_final['Information'] = df_final.apply(get_information, axis=1)
             
+            output_columns = self.config.config.get("output_columns", [])
+            for col_config in output_columns:
+                source_id = col_config.get("source_id")
+                col_id = col_config.get("id")
+                # Wenn keine Datenquelle -> manuelle Spalte. Füge sie zum DataFrame hinzu.
+                if not source_id and col_id not in df_final.columns:
+                    df_final[col_id] = ""
+
             self.positionen = df_final.to_dict(orient='records')
             self.is_loaded = True
             print(f"    [DEBUG] Erfolgreich {len(self.positionen)} Positionen verarbeitet.")
@@ -178,7 +186,6 @@ class BomProcessor:
         """
         self.folder_path = folder_path
         self.boms = {}  # Dictionary, um ZN auf Stueckliste-Objekte zu mappen
-        self.config = config_manager # Speichere den ConfigManager
         self.config = config_manager # Speichere den ConfigManager
 
     def run(self):

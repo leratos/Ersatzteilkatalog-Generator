@@ -50,14 +50,27 @@ class ConfigManager:
                 "Teileart": "M" 
             },
             "output_columns": [
-                {"id": "POS", "header": "Pos.", "width_cm": 1.2},
-                {"id": "Menge", "header": "Menge", "width_cm": 2.0},
-                {"id": "Benennung_Formatiert", "header": "Benennung", "width_cm": 5.1},
-                {"id": "Bestellnummer_Kunde", "header": "Bestellnummer", "width_cm": 3.8},
-                {"id": "Information", "header": "Information", "width_cm": 3.8},
-                {"id": "Seite", "header": "Seite", "width_cm": 1.3}
+                {"id": "std_pos", "header": "Pos.", "width_percent": 8, "source_id": "POS", "type": "standard"},
+                {"id": "std_menge", "header": "Menge", "width_percent": 10, "source_id": "Menge", "type": "standard"},
+                {"id": "std_benennung", "header": "Benennung", "width_percent": 30, "source_id": "Benennung_Formatiert", "type": "standard"},
+                {"id": "std_bestellnr", "header": "Bestellnummer", "width_percent": 22, "source_id": "Bestellnummer_Kunde", "type": "standard"},
+                {"id": "std_info", "header": "Information", "width_percent": 22, "source_id": "Information", "type": "standard"},
+                {"id": "std_seite", "header": "Seite", "width_percent": 8, "source_id": "Seite", "type": "standard"}
             ]
         }
+
+    def get_all_available_data_ids(self) -> list:
+        """
+        Gibt eine Liste aller möglichen Daten-IDs zurück, die für die Ausgabe
+        verwendet werden können.
+        """
+        input_fields = list(self.config.get("column_mapping", {}).keys())
+        generated_fields = [
+            "Benennung_Formatiert", "Menge", 
+            "Bestellnummer_Kunde", "Information", "Seite"
+        ]
+        all_fields = sorted(list(set(input_fields + generated_fields)))
+        return [""] + all_fields # Leere Option hinzufügen
 
     def _load_config(self):
         """
@@ -70,15 +83,17 @@ class ConfigManager:
         
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                # Hier könnte man noch eine Validierung hinzufügen, um sicherzustellen,
-                # dass alle benötigten Keys vorhanden sind.
+
                 loaded_config = json.load(f)
+            is_dirty = False
             # Stelle sicher, dass alle Haupt-Keys vorhanden sind
             for key, value in self._default_config.items():
                 if key not in loaded_config:
                     loaded_config[key] = value
+                    is_dirty = True
             # Speichere die ggf. ergänzte Konfiguration zurück
-            self.save_config(loaded_config)
+            if is_dirty:
+                self.save_config(loaded_config)
             return loaded_config
         except (json.JSONDecodeError, IOError) as e:
             print(f"FEHLER: Konnte 'mapping.json' nicht laden. Verwende Standardwerte. Fehler: {e}")
