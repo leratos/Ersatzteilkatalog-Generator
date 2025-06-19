@@ -3,11 +3,13 @@ import os
 import sys
 import shutil
 import json
+import openpyxl
 from functools import partial
 from Klassen.config import ConfigManager
 from Klassen.generator import DocxGenerator
 from Klassen.stueckliste import BomProcessor
 from Klassen.editor_ui import ConfigEditorWindow
+from openpyxl.utils import get_column_letter
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, project_path: str):
@@ -46,13 +48,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.save_button = QtWidgets.QPushButton("Auswahl speichern")
         self.load_button = QtWidgets.QPushButton("Auswahl laden")
         self.info_button = QtWidgets.QPushButton("Info / Copyright")
-        self.config_button = QtWidgets.QPushButton("Spalten-Editor")
+        self.config_button = QtWidgets.QPushButton("Editor")
 
         # --- Layout ---
         top_layout = QtWidgets.QHBoxLayout()
         top_layout.addWidget(QtWidgets.QLabel("Hauptbaugruppe:"))
         top_layout.addWidget(self.assembly_selector, 2)
-        top_layout.addWidget(QtWidgets.QLabel("Ersteller:")); top_layout.addWidget(self.author_input, 1)
+        top_layout.addWidget(QtWidgets.QLabel("Ersteller:"))
+        top_layout.addWidget(self.author_input, 1)
         top_layout.addWidget(self.cover_graphic_button)
         
         bottom_layout = QtWidgets.QHBoxLayout()
@@ -84,17 +87,42 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config_button.clicked.connect(self._open_config_editor)
 
     def _open_config_editor(self):
+        """
+        Liest die Spalten der aktuellen Hauptstückliste aus und öffnet den Editor.
+        """
+        main_bom_znr = self.assembly_selector.currentText()
+        main_bom_obj = self.all_boms.get(main_bom_znr)
+
+        if not main_bom_obj:
+            QtWidgets.QMessageBox.warning(self, "Fehler", "Bitte zuerst eine Hauptbaugruppe auswählen.")
+            return
+        excel_columns = self._get_excel_headers(main_bom_obj.filepath)
+
         """Öffnet den Konfigurations-Editor-Dialog."""
-        editor_dialog = ConfigEditorWindow(self.config, self)
+        editor_dialog = ConfigEditorWindow(self.config, excel_columns, self)
         # .exec() öffnet den Dialog modal (blockiert das Hauptfenster)
         if editor_dialog.exec(): # Entspricht QDialog.DialogCode.Accepted
             print("INFO: Konfiguration wurde gespeichert. Lade Projekt neu...")
             # Lade die Projektdaten neu, um die Änderungen zu übernehmen.
             self._load_project_data()
             QtWidgets.QMessageBox.information(self, "Konfiguration gespeichert", 
-                "Die Spaltenzuordnung wurde aktualisiert. Das Projekt wurde neu geladen.")
+                "Die Konfiguration für benutzerdefinierte Spalten wurde aktualisiert. Das Projekt wird neu geladen.")
 
-    # NEU: Methode zum Anzeigen des Info-Dialogs
+    def _get_excel_headers(self, file_path: str) -> list:
+        """Liest nur die Spaltenüberschriften aus einer Excel-Datei."""
+        try:
+            workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            sheet = workbook['Import']
+            headers = []
+            # Lese Spalten aus Zeile 5
+            for cell in sheet[5]:
+                if cell.value:
+                    headers.append(f"{get_column_letter(cell.column)} - {cell.value}")
+            return headers
+        except Exception as e:
+            print(f"Fehler beim Lesen der Muster-Header: {e}")
+            return []
+
     def _show_info_dialog(self):
         """Zeigt ein Fenster mit Copyright-Informationen an."""
         msg_box = QtWidgets.QMessageBox(self)

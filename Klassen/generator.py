@@ -123,6 +123,9 @@ class DocxGenerator:
         headers = [col["header"] for col in output_columns]
         table = self.doc.add_table(rows=1, cols=len(headers))
         table.style = 'Table Grid'
+        table.width = Cm(16)
+        table.autofit = False
+        table.allow_autofit = False
         
         hdr_cells = table.rows[0].cells
         tr = table.rows[0]._tr
@@ -157,9 +160,12 @@ class DocxGenerator:
             if (i % 2) != 0:
                 for cell in row_cells: self._set_cell_shading(cell, "DAE9F8")
 
-        col_widths = [Cm(col.get("width_cm", 2.5)) for col in output_columns]
-        for i, width in enumerate(col_widths):
-            for cell in table.columns[i].cells: cell.width = width
+        total_percent = sum(col.get("width_percent", 10) for col in output_columns)
+        for i, col_config in enumerate(output_columns):
+            percent = col_config.get("width_percent", 10)
+            # Berechne den prozentualen Anteil der Spalte an der Gesamtbreite
+            # Die Gesamtbreite wird in "fiftieths of a percent" angegeben (also * 50)
+            table.columns[i].width = int(table.width * (percent / total_percent))
 
     def _create_cover_sheet(self):
         p_title = self.doc.add_paragraph()
