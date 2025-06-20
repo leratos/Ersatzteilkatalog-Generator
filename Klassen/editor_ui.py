@@ -1,72 +1,129 @@
 # -*- coding: utf-8 -*-
 """
-Dieses Modul definiert das Konfigurationsfenster (Editor).
+Dieses Modul definiert das UI-Fenster für den umfassenden Konfigurations-Editor.
 
-Es ermöglicht dem Benutzer, die Zuordnung von Excel-Spalten zu den
-internen Datenfeldern des Programms dynamisch zu ändern, ohne den
-Quellcode bearbeiten zu müssen.
+Es ermöglicht dem Benutzer die Bearbeitung von:
+1. Spaltenzuordnung (Import)
+2. Katalog-Layout (Export)
+3. Setzregeln (Daten-Generierung)
 """
 
-from PySide6 import QtWidgets, QtCore
-import openpyxl
-from openpyxl.utils import get_column_letter
 import re
 import time
+from functools import partial
+
+from PySide6 import QtCore, QtWidgets
+
 
 class ConfigEditorWindow(QtWidgets.QDialog):
     """
-    Ein Dialogfenster zur Bearbeitung der Projekt-Konfiguration (mapping.json).
+    Ein Dialogfenster zur Bearbeitung der kompletten Projekt-Konfiguration.
     """
-    def __init__(self, config_manager, available_excel_columns, parent=None):
-        """
-        Initialisiert das Editor-Fenster.
 
-        Args:
-            config_manager (ConfigManager): Die Instanz des ConfigManagers,
-                                            die die Konfiguration verwaltet.
-            parent (QWidget, optional): Das übergeordnete Widget. Defaults to None.
-        """
+    def __init__(self, config_manager, available_excel_columns, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.available_columns = [""] + available_excel_columns
-        self.available_excel_columns = available_excel_columns
-        self.setWindowTitle("Katalog-Editor")
-        self.setMinimumSize(800, 600)
+        self.current_rules = self.config_manager.config.get(
+            "generation_rules", {}
+        )
+        self.current_target_field = None
 
+        self.rule_type_map = {
+            "Priorisierte Liste": "prioritized_list",
+            "Werte kombinieren": "combine",
+            "Bedingte Zuweisung": "conditional",
+        }
+        self.operator_map = {
+            "ist gleich": "is",
+            "ist nicht gleich": "is_not",
+            "ist leer": "is_empty",
+            "ist nicht leer": "is_not_empty",
+            "enthält": "contains",
+        }
+
+        self.setWindowTitle("Konfigurations-Editor")
+        self.setMinimumSize(950, 750)
+        self._setup_ui()
+        self._connect_signals()
+        self._populate_target_fields_list()
+
+        if self.target_list.count() > 0:
+            self.target_list.setCurrentRow(0)
+        self._update_total_width()
+
+    # --------------------------------------------------------------------------
+    # --- UI Setup Methoden ---
+    # --------------------------------------------------------------------------
+
+    def _setup_ui(self):
+        """Erstellt alle UI-Elemente und ordnet sie im Layout an."""
         self.layout = QtWidgets.QVBoxLayout(self)
         self.tabs = QtWidgets.QTabWidget()
         self.layout.addWidget(self.tabs)
-        
+
         self.mapping_tab = QtWidgets.QWidget()
         self.layout_tab = QtWidgets.QWidget()
+        self.rules_tab = QtWidgets.QWidget()
 
         self.tabs.addTab(self.mapping_tab, "Spaltenzuordnung (Import)")
         self.tabs.addTab(self.layout_tab, "Katalog-Layout (Export)")
+        self.tabs.addTab(self.rules_tab, "Setzregeln (Generierung)")
 
         self._setup_mapping_tab()
         self._setup_layout_tab()
+        self._setup_rules_tab()
 
         self.button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Save | 
-            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+            QtWidgets.QDialogButtonBox.StandardButton.Save
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
-        self.button_box.accepted.connect(self.accept)
-        self.button_box.rejected.connect(self.reject)
         self.layout.addWidget(self.button_box)
 
+    def _setup_mapping_tab(self):
+        """Erstellt die UI für den 'Spaltenzuordnung'-Tab."""
+        layout = QtWidgets.QVBoxLayout(self.mapping_tab)
+        header_group = QtWidgets.QGroupBox("Header-Felder (Zellen)")
+        header_layout = QtWidgets.QGridLayout()
+        header_group.setLayout(header_layout)
+
+        self.header_widgets = {}
+        header_config = self.config_manager.config.get("header_mapping", {})
+        for row, (key, value) in enumerate(header_config.items()):
+            label = QtWidgets.QLabel(f"{key}:")
+            line_edit = QtWidgets.QLineEdit(value)
+            self.header_widgets[key] = line_edit
+            header_layout.addWidget(label, row, 0)
+            header_layout.addWidget(line_edit, row, 1)
+
+        self.column_group = QtWidgets.QGroupBox("Positions-Felder (Spalten)")
+        self.column_layout = QtWidgets.QGridLayout()
+        self.column_group.setLayout(self.column_layout)
+        self.column_widgets = {}
+        self._create_column_comboboxes()
+
+        layout.addWidget(header_group)
+        layout.addWidget(self.column_group)
+        layout.addStretch()
+
     def _setup_layout_tab(self):
-        """Erstellt die UI für den Katalog-Layout-Editor."""
+        """Erstellt die UI für den 'Katalog-Layout'-Tab."""
         layout = QtWidgets.QVBoxLayout(self.layout_tab)
-        
         self.layout_table = QtWidgets.QTableWidget()
         self.layout_table.setColumnCount(3)
         self.layout_table.setHorizontalHeaderLabels(
-            ["Spaltenüberschrift", "Datenquelle (interne ID)", "Breite (%)"] # Geändert
+            ["Spaltenüberschrift", "Datenquelle (interne ID)", "Breite (%)"]
         )
-        self.layout_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.layout_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.layout_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        
+        header_view = self.layout_table.horizontalHeader()
+        header_view.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        header_view.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        header_view.setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
         self._populate_layout_table()
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -74,29 +131,293 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         remove_button = QtWidgets.QPushButton("Ausgewählte Spalte entfernen")
         up_button = QtWidgets.QPushButton("Hoch")
         down_button = QtWidgets.QPushButton("Runter")
-        
         button_layout.addWidget(add_button)
         button_layout.addWidget(remove_button)
         button_layout.addStretch()
         button_layout.addWidget(up_button)
         button_layout.addWidget(down_button)
-        
+
         layout.addWidget(self.layout_table)
         layout.addLayout(button_layout)
-        
+
+        self.total_width_label = QtWidgets.QLabel()
+        self.total_width_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight
+        )
+        self.total_width_label.setStyleSheet(
+            "font-weight: bold; padding-right: 10px;"
+        )
+        layout.addWidget(self.total_width_label)
+
         add_button.clicked.connect(self._add_layout_row)
         remove_button.clicked.connect(self._remove_layout_row)
-        up_button.clicked.connect(self._move_row_up) 
-        down_button.clicked.connect(self._move_row_down)
+        up_button.clicked.connect(partial(self._move_layout_row, -1))
+        down_button.clicked.connect(partial(self._move_layout_row, 1))
+
+    def _setup_rules_tab(self):
+        """Erstellt die UI für den 'Setzregeln'-Tab."""
+        main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        tab_layout = QtWidgets.QHBoxLayout(self.rules_tab)
+        tab_layout.addWidget(main_splitter)
+
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(QtWidgets.QLabel("Generierte Katalog-Felder:"))
+        self.target_list = QtWidgets.QListWidget()
+        left_layout.addWidget(self.target_list)
+        target_button_layout = QtWidgets.QHBoxLayout()
+        self.add_target_button = QtWidgets.QPushButton("Neu")
+        self.remove_target_button = QtWidgets.QPushButton("Löschen")
+        target_button_layout.addWidget(self.add_target_button)
+        target_button_layout.addWidget(self.remove_target_button)
+        left_layout.addLayout(target_button_layout)
+        main_splitter.addWidget(left_panel)
+
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(5, 0, 0, 0)
+        self.rule_editor_groupbox = QtWidgets.QGroupBox(
+            "Regel-Definition für: [Kein Feld ausgewählt]"
+        )
+        right_layout.addWidget(self.rule_editor_groupbox)
+        self._setup_rule_editor_area()
+        main_splitter.addWidget(right_panel)
+        main_splitter.setSizes([250, 650])
+
+    def _setup_rule_editor_area(self):
+        """Erstellt den Inhalt des rechten Panels für den Regeleditor."""
+        editor_layout = QtWidgets.QVBoxLayout(self.rule_editor_groupbox)
+        rule_type_layout = QtWidgets.QHBoxLayout()
+        rule_type_layout.addWidget(QtWidgets.QLabel("Regel-Typ:"))
+        self.rule_type_combo = QtWidgets.QComboBox()
+        self.rule_type_combo.addItems(self.rule_type_map.keys())
+        rule_type_layout.addWidget(self.rule_type_combo)
+        editor_layout.addLayout(rule_type_layout)
+        self.rule_stack = QtWidgets.QStackedWidget()
+        editor_layout.addWidget(self.rule_stack)
+
+        self.rule_stack.addWidget(self._create_list_based_ui("prio"))
+        self.rule_stack.addWidget(self._create_combine_ui())
+        self.rule_stack.addWidget(self._create_conditional_ui())
+
+    def _create_list_based_ui(self, rule_prefix: str) -> QtWidgets.QWidget:
+        """Erstellt UI für 'Priorisierte Liste' und 'Werte kombinieren'."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        if rule_prefix == "prio":
+            layout.addWidget(QtWidgets.QLabel("<b>Funktion:</b> Nimmt den Wert des ersten Feldes in der Liste, das nicht leer ist."))
+            layout.addWidget(QtWidgets.QLabel("Quell-Felder (in Priorität von oben nach unten):"))
+            list_widget = self.prio_list_widget = QtWidgets.QListWidget()
+        else:  # 'combine'
+            layout.addWidget(QtWidgets.QLabel("<b>Funktion:</b> Verbindet die Werte mehrerer Felder mit einem Trennzeichen."))
+            layout.addWidget(QtWidgets.QLabel("Zu kombinierende Quell-Felder (in Reihenfolge):"))
+            list_widget = self.combine_list_widget = QtWidgets.QListWidget()
+
+        layout.addWidget(list_widget)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        add_btn = QtWidgets.QPushButton("Quelle Hinzufügen")
+        remove_btn = QtWidgets.QPushButton("Quelle Entfernen")
+        up_btn = QtWidgets.QPushButton("▲")
+        down_btn = QtWidgets.QPushButton("▼")
+        button_layout.addWidget(add_btn)
+        button_layout.addWidget(remove_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(up_btn)
+        button_layout.addWidget(down_btn)
+        layout.addLayout(button_layout)
+
+        add_btn.clicked.connect(partial(self._add_source_to_list, list_widget))
+        remove_btn.clicked.connect(partial(self._remove_source_from_list, list_widget))
+        up_btn.clicked.connect(partial(self._move_list_item, list_widget, -1))
+        down_btn.clicked.connect(partial(self._move_list_item, list_widget, 1))
+
+        if rule_prefix == "combine":
+            separator_layout = QtWidgets.QHBoxLayout()
+            separator_layout.addWidget(QtWidgets.QLabel("Trennzeichen:"))
+            self.separator_input = QtWidgets.QLineEdit()
+            self.separator_input.setToolTip("Für einen Zeilenumbruch '\\n' verwenden.")
+            separator_layout.addWidget(self.separator_input)
+            layout.addLayout(separator_layout)
+
+        return widget
+
+    def _create_combine_ui(self) -> QtWidgets.QWidget:
+        return self._create_list_based_ui("combine")
+
+    def _create_conditional_ui(self) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        form_layout = QtWidgets.QFormLayout(widget)
+        form_layout.setContentsMargins(10, 10, 10, 10)
+        form_layout.setSpacing(10)
+
+        form_layout.addRow(QtWidgets.QLabel("<b>WENN-Bedingung:</b>"))
+        self.if_source_combo = QtWidgets.QComboBox()
+        form_layout.addRow("    Feld:", self.if_source_combo)
+        self.if_operator_combo = QtWidgets.QComboBox()
+        self.if_operator_combo.addItems(self.operator_map.keys())
+        form_layout.addRow("    Operator:", self.if_operator_combo)
+        self.if_value_input = QtWidgets.QLineEdit()
+        self.if_value_input.setToolTip("Mehrere Werte mit Semikolon (;) trennen.")
+        form_layout.addRow("    Vergleichswert:", self.if_value_input)
+
+        form_layout.addRow(QtWidgets.QLabel("<b>DANN-Aktion:</b>"))
+        self.then_source_combo = QtWidgets.QComboBox()
+        form_layout.addRow("    Nimm Wert aus Feld:", self.then_source_combo)
+
+        form_layout.addRow(QtWidgets.QLabel("<b>SONST-Aktion:</b>"))
+        self.else_source_combo = QtWidgets.QComboBox()
+        form_layout.addRow("    Nimm Wert aus Feld:", self.else_source_combo)
+
+        self._populate_conditional_combos()
+        return widget
+
+    # --------------------------------------------------------------------------
+    # --- Signal-Verbindungen und Logik ---
+    # --------------------------------------------------------------------------
+
+    def _connect_signals(self):
+        """Verbindet alle Signale mit den entsprechenden Slots."""
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        self.target_list.currentItemChanged.connect(self._on_target_selected)
+        self.rule_type_combo.currentIndexChanged.connect(self.rule_stack.setCurrentIndex)
+        self.add_target_button.clicked.connect(self._add_new_target_field)
+        self.remove_target_button.clicked.connect(self._remove_target_field)
+
+    def _on_target_selected(self, current_item, previous_item):
+        """Wird aufgerufen, wenn links ein Zielfeld ausgewählt wird."""
+        if previous_item:
+            self._save_current_rule_state(previous_item.text())
+
+        if not current_item:
+            self.rule_editor_groupbox.setTitle(
+                "Regel-Definition für: [Kein Feld ausgewählt]"
+            )
+            self.rule_editor_groupbox.setEnabled(False)
+            return
+
+        self.current_target_field = current_item.text()
+        self.rule_editor_groupbox.setTitle(
+            f"Regel-Definition für: '{self.current_target_field}'"
+        )
+        self.rule_editor_groupbox.setEnabled(True)
+        self._populate_conditional_combos()
+        self._load_rule_for_target(self.current_target_field)
+
+    def _load_rule_for_target(self, target_field: str):
+        """Lädt die Regel für das ausgewählte Feld und stellt die UI ein."""
+        rule = self.current_rules.get(target_field, {})
+        rule_type_key = rule.get("type", "prioritized_list")
+
+        ui_text_list = [k for k, v in self.rule_type_map.items() if v == rule_type_key]
+        if ui_text_list:
+            self.rule_type_combo.setCurrentText(ui_text_list[0])
+
+        if rule_type_key == "prioritized_list":
+            self.prio_list_widget.clear()
+            self.prio_list_widget.addItems(rule.get("sources", []))
+        elif rule_type_key == "combine":
+            self.combine_list_widget.clear()
+            self.combine_list_widget.addItems(rule.get("sources", []))
+            self.separator_input.setText(rule.get("separator", ""))
+        elif rule_type_key == "conditional":
+            if_clause = rule.get("if", {})
+            then_clause = rule.get("then", {})
+            else_clause = rule.get("else", {})
+            self.if_source_combo.setCurrentText(if_clause.get("source", ""))
+            op_ui_text_list = [
+                k for k, v in self.operator_map.items() if v == if_clause.get("operator")
+            ]
+            if op_ui_text_list:
+                self.if_operator_combo.setCurrentText(op_ui_text_list[0])
+            self.if_value_input.setText(if_clause.get("value", ""))
+            self.then_source_combo.setCurrentText(then_clause.get("source", ""))
+            self.else_source_combo.setCurrentText(else_clause.get("source", ""))
+
+    def _save_current_rule_state(self, target_field: str):
+        """Liest die UI-Werte aus und speichert sie in self.current_rules."""
+        if not target_field:
+            return
+        
+        rule_type_key = self.rule_type_map[self.rule_type_combo.currentText()]
+        new_rule = {"type": rule_type_key}
+
+        if rule_type_key == "prioritized_list":
+            sources = [self.prio_list_widget.item(i).text() for i in range(self.prio_list_widget.count())]
+            new_rule["sources"] = sources
+        elif rule_type_key == "combine":
+            sources = [self.combine_list_widget.item(i).text() for i in range(self.combine_list_widget.count())]
+            new_rule["sources"] = sources
+            new_rule["separator"] = self.separator_input.text()
+        elif rule_type_key == "conditional":
+            operator_key = self.operator_map[self.if_operator_combo.currentText()]
+            new_rule["if"] = {"source": self.if_source_combo.currentText(), "operator": operator_key, "value": self.if_value_input.text()}
+            new_rule["then"] = {"source": self.then_source_combo.currentText()}
+            new_rule["else"] = {"source": self.else_source_combo.currentText()}
+            
+        self.current_rules[target_field] = new_rule
+
+    def accept(self):
+        """Sammelt Daten aus allen Tabs und speichert die Konfiguration."""
+        if self.current_target_field:
+            self._save_current_rule_state(self.current_target_field)
+
+        new_header_mapping = {
+            key: widget.text().upper() for key, widget in self.header_widgets.items()
+        }
+        new_column_mapping = {
+            key: widget.currentText().split(" - ")[0] for key, widget in self.column_widgets.items()
+        }
+        new_output_columns = [
+            data for row in range(self.layout_table.rowCount()) if (data := self._get_row_data(row))
+        ]
+
+        new_config = self.config_manager.config
+        new_config.update({
+            "header_mapping": new_header_mapping,
+            "column_mapping": new_column_mapping,
+            "output_columns": new_output_columns,
+            "generation_rules": self.current_rules
+        })
+        self.config_manager.save_config(new_config)
+        super().accept()
+
+    # --------------------------------------------------------------------------
+    # --- Hilfsmethoden ---
+    # --------------------------------------------------------------------------
+
+    def _get_all_available_sources(self, exclude_field: str = None) -> list:
+        """Sammelt alle verfügbaren Quell-Felder (Rohdaten + andere Regeln)."""
+        input_fields = list(self.config_manager.config.get("column_mapping", {}).keys())
+        rule_fields = list(self.current_rules.keys())
+        all_sources = sorted(list(set(input_fields + rule_fields)))
+        if exclude_field and exclude_field in all_sources:
+            all_sources.remove(exclude_field)
+        return [""] + all_sources
+
+    def _update_total_width(self):
+        """Berechnet die Gesamtbreite und aktualisiert das Label."""
+        total = sum(
+            self.layout_table.cellWidget(row, 2).value()
+            for row in range(self.layout_table.rowCount())
+            if isinstance(self.layout_table.cellWidget(row, 2), QtWidgets.QSpinBox)
+        )
+        color = "red" if total != 100 else "black"
+        self.total_width_label.setText(f"<b>Gesamtbreite: {total} %</b>")
+        self.total_width_label.setStyleSheet(
+            f"font-weight: bold; padding-right: 10px; color: {color};"
+        )
 
     def _create_row_widgets(self, row, data, available_ids):
-        """Erstellt die Widgets für eine einzelne Zeile der Tabelle."""
+        """Erstellt die Widgets für eine einzelne Zeile der Layout-Tabelle."""
         is_standard = data.get("type") == "standard"
-        
         item_header = QtWidgets.QTableWidgetItem(data.get("header", "Neue Spalte"))
         self.layout_table.setItem(row, 0, item_header)
         item_header.setData(QtCore.Qt.ItemDataRole.UserRole, data)
-
         source_id = data.get("source_id", "")
         if is_standard:
             label = QtWidgets.QLabel(f"<i>{source_id} (Standard)</i>")
@@ -113,47 +434,113 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         spin_width.setSuffix(" %")
         spin_width.setValue(int(data.get("width_percent", 10)))
         self.layout_table.setCellWidget(row, 2, spin_width)
-        
+        spin_width.valueChanged.connect(self._update_total_width)
 
-    def _get_row_data(self, row):
-        """Liest alle Daten aus einer Zeile der Layout-Tabelle."""
-        header_item = self.layout_table.item(row, 0)
-        if not header_item: return None
-        
-        stored_data = header_item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if not isinstance(stored_data, dict):
-            # Fallback für den unwahrscheinlichen Fall, dass die Daten veraltet sind
-            stored_data = {"id": None, "type": "custom"}
+    def _add_layout_row(self):
+        """Fügt eine neue, leere Zeile zur Layout-Tabelle hinzu."""
+        row = self.layout_table.rowCount()
+        self.layout_table.insertRow(row)
+        available_ids = self._get_all_available_sources()
+        new_id = f"custom_{int(time.time() * 1000)}"
+        new_col_data = {"id": new_id, "type": "custom", "header": "Neue Spalte", "width_percent": 15, "source_id": ""}
+        self._create_row_widgets(row, new_col_data, available_ids)
+        self._update_total_width()
 
-        col_type = stored_data.get("type")
-        col_id = stored_data.get("id") # Wichtig: Die ursprüngliche ID wird hier geholt.
-        
-        source_widget = self.layout_table.cellWidget(row, 1)
-        source_id = ""
-        if isinstance(source_widget, QtWidgets.QComboBox):
-            source_id = source_widget.currentText()
-        elif isinstance(source_widget, QtWidgets.QLabel):
-            match = re.search(r'<i>(.*?) \(Standard\)</i>', source_widget.text())
-            if match: source_id = match.group(1)
+    def _remove_layout_row(self):
+        """Entfernt die ausgewählte Zeile aus der Layout-Tabelle."""
+        row = self.layout_table.currentRow()
+        if row >= 0:
+            item = self.layout_table.item(row, 0)
+            if item:
+                stored_data = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                if isinstance(stored_data, dict) and stored_data.get("type") == "custom":
+                    self.layout_table.removeRow(row)
+                    self._update_total_width()
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Fehler", "Standard-Spalten können nicht entfernt werden.")
 
-        width_widget = self.layout_table.cellWidget(row, 2)
+    def _move_layout_row(self, direction: int):
+        """Bewegt die ausgewählte Zeile nach oben oder unten."""
+        row = self.layout_table.currentRow()
+        if row == -1: return
         
-        return {
-            "id": col_id, # Wichtig: Die ID wird in die neue Konfiguration übernommen.
-            "header": header_item.text(),
-            "width_percent": width_widget.value(),
-            "source_id": source_id,
-            "type": col_type
-        }
+        new_row = row + direction
+        if 0 <= new_row < self.layout_table.rowCount():
+            all_sources = self._get_all_available_sources()
+            data = self._get_row_data(row)
+            self.layout_table.removeRow(row)
+            self.layout_table.insertRow(new_row)
+            self._create_row_widgets(new_row, data, all_sources)
+            self.layout_table.setCurrentCell(new_row, 0)
 
+    def _populate_target_fields_list(self):
+        """Füllt die linke Liste der Setzregeln und aktualisiert die Quellen."""
+        self.target_list.clear()
+        self.target_list.addItems(sorted(self.current_rules.keys()))
+        self._populate_conditional_combos()
+
+    def _add_new_target_field(self):
+        """Fügt ein neues, leeres generiertes Feld hinzu."""
+        text, ok = QtWidgets.QInputDialog.getText(self, "Neues Feld", "Name des neuen generierten Feldes:")
+        if ok and text:
+            if text in self.current_rules:
+                QtWidgets.QMessageBox.warning(self, "Fehler", "Ein Feld mit diesem Namen existiert bereits.")
+                return
+            self.current_rules[text] = {"type": "prioritized_list", "sources": []}
+            self._populate_target_fields_list()
+            # Finde und selektiere das neue Item in der Liste
+            items = self.target_list.findItems(text, QtCore.Qt.MatchFlag.MatchExactly)
+            if items:
+                self.target_list.setCurrentItem(items[0])
+    
+    def _remove_target_field(self):
+        """Entfernt das ausgewählte generierte Feld."""
+        current_item = self.target_list.currentItem()
+        if not current_item: return
+        
+        reply = QtWidgets.QMessageBox.question(self, "Löschen", f"Möchten Sie das Feld '{current_item.text()}' und seine Regel wirklich löschen?")
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            del self.current_rules[current_item.text()]
+            self._populate_target_fields_list()
+
+    def _add_source_to_list(self, list_widget: QtWidgets.QListWidget):
+        """Fügt eine ausgewählte Quelle zu einer der Listen-Widgets hinzu."""
+        available_sources = self._get_all_available_sources(self.current_target_field)
+        source, ok = QtWidgets.QInputDialog.getItem(self, "Quelle auswählen", "Wählen Sie ein Quell-Feld aus:", available_sources, 0, False)
+        if ok and source:
+            list_widget.addItem(source)
+
+    def _remove_source_from_list(self, list_widget: QtWidgets.QListWidget):
+        """Entfernt die ausgewählte Quelle aus einem Listen-Widget."""
+        current_item = list_widget.currentItem()
+        if current_item:
+            list_widget.takeItem(list_widget.row(current_item))
+            
+    def _move_list_item(self, list_widget: QtWidgets.QListWidget, direction: int):
+        """Bewegt ein Item in einem Listen-Widget nach oben oder unten."""
+        current_row = list_widget.currentRow()
+        if current_row == -1: return
+        new_row = current_row + direction
+        if 0 <= new_row < list_widget.count():
+            item = list_widget.takeItem(current_row)
+            list_widget.insertItem(new_row, item)
+            list_widget.setCurrentRow(new_row)
+
+    def _populate_conditional_combos(self):
+        """Füllt die Dropdowns für die bedingte Zuweisung neu."""
+        available_sources = self._get_all_available_sources(self.current_target_field)
+        self.if_source_combo.clear()
+        self.if_source_combo.addItems(available_sources)
+        self.then_source_combo.clear()
+        self.then_source_combo.addItems(available_sources)
+        self.else_source_combo.clear()
+        self.else_source_combo.addItems(available_sources)
+            
     def _setup_mapping_tab(self):
-        """Erstellt die Widgets für den "Spaltenzuordnung"-Tab."""
         layout = QtWidgets.QVBoxLayout(self.mapping_tab)
-
         header_group = QtWidgets.QGroupBox("Header-Felder (Zellen)")
         header_layout = QtWidgets.QGridLayout()
         header_group.setLayout(header_layout)
-        
         self.header_widgets = {}
         header_config = self.config_manager.config.get("header_mapping", {})
         for row, (key, value) in enumerate(header_config.items()):
@@ -166,239 +553,55 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.column_group = QtWidgets.QGroupBox("Positions-Felder (Spalten)")
         self.column_layout = QtWidgets.QGridLayout()
         self.column_group.setLayout(self.column_layout)
-
         self.column_widgets = {}
-        
         self._create_column_comboboxes()
-            
         layout.addWidget(header_group)
         layout.addWidget(self.column_group)
         layout.addStretch()
 
-    
-    def _add_column(self):
-        """Fügt ein ausgewähltes Feld zur Liste der Katalog-Spalten hinzu."""
-        selected_item = self.available_fields_list.currentItem()
-        if selected_item:
-            # Füge den Header-Text zur UI-Liste hinzu.
-            self.selected_columns_list.addItem(selected_item.text())
-
     def _create_column_comboboxes(self):
-        """(Neu) Erstellt oder aktualisiert die Dropdown-Menüs für die Spalten."""
         while self.column_layout.count():
             child = self.column_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-
         self.column_widgets = {}
         column_config = self.config_manager.config.get("column_mapping", {})
-        
         for row, (key, current_value) in enumerate(column_config.items()):
             label = QtWidgets.QLabel(f"{key}:")
             combo_box = QtWidgets.QComboBox()
             combo_box.addItems(self.available_columns)
-            
-            full_text_to_set = ""
-            for option in self.available_columns:
-                if option.startswith(current_value + ' -'):
-                    full_text_to_set = option
-                    break
-            
+            full_text_to_set = next((opt for opt in self.available_columns if opt.startswith(current_value + " -")), None)
             if full_text_to_set:
                 combo_box.setCurrentText(full_text_to_set)
             else:
-                # Fallback, falls der Buchstabe nicht in den Optionen ist
                 combo_box.addItem(current_value)
                 combo_box.setCurrentText(current_value)
-
             self.column_widgets[key] = combo_box
             self.column_layout.addWidget(label, row, 0)
             self.column_layout.addWidget(combo_box, row, 1)
-
-    def _load_sample_bom(self):
-        """
-        Öffnet eine Excel-Datei, liest die Spaltenüberschriften aus,
-        erweitert die Konfiguration um neue Felder und aktualisiert die komplette UI.
-        """
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Muster-Stückliste auswählen", "", "Excel-Dateien (*.xlsm *.xlsx)")
-
-        if not file_path:
-            return
-        try:
-            workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-            sheet = workbook['Import']
             
-            headers_full_str = []  # z.B. ["Q - Änderungsindex"]
-            header_map = {}        # z.B. {"Änderungsindex": "Q"}
-
-            for cell in sheet[5]:  # Annahme: Header sind in Zeile 5
-                if cell.value:
-                    col_letter = get_column_letter(cell.column)
-                    header_name = str(cell.value).strip()
-                    
-                    if header_name:
-                        headers_full_str.append(f"{col_letter} - {header_name}")
-                        header_map[header_name] = col_letter
-
-            if headers_full_str:
-                # --- KERN DER NEUEN LOGIK ---
-                # 1. Hole die aktuelle Konfiguration aus dem Manager
-                new_config = self.config_manager.config
-                current_mapping = new_config.get("column_mapping", {})
-                
-                # 2. Füge neue, bisher unbekannte Felder zur Konfiguration hinzu
-                new_fields_added = False
-                for name, letter in header_map.items():
-                    if name not in current_mapping:
-                        current_mapping[name] = letter  # z.B. current_mapping["Änderungsindex"] = "Q"
-                        new_fields_added = True
-
-                # 3. Aktualisiere die Konfiguration im Speicher (wird erst bei "Save" geschrieben)
-                new_config["column_mapping"] = current_mapping
-                self.config_manager.config = new_config
-
-                # 4. Aktualisiere die UI-Komponenten, die von der Konfiguration abhängen
-                self.available_columns = [""] + headers_full_str
-                
-                # Baue beide Tabs komplett neu auf, da sich die Konfig geändert haben könnte
-                self._create_column_comboboxes()  # Baut Import-Tab neu auf (zeigt jetzt "Änderungsindex")
-                self._populate_layout_table()     # Baut Export-Tab neu auf (Dropdown hat jetzt "Änderungsindex")
-
-                msg = (f"{len(headers_full_str)} Spalten geladen. Die Dropdown-Listen wurden aktualisiert.")
-                if new_fields_added:
-                    msg += "\nNeue Felder wurden im 'Import'-Tab ergänzt."
-                
-                QtWidgets.QMessageBox.information(self, "Erfolg", msg)
-
-            else:
-                QtWidgets.QMessageBox.warning(self, "Fehler", "Konnte keine Spaltenüberschriften in Zeile 5 finden.")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Fehler beim Lesen der Datei", str(e))
-            
-    def accept(self):
-        """Wird aufgerufen, wenn der Benutzer auf "Speichern" klickt."""
-        new_header_mapping = {}
-        new_column_mapping = {}
-
-        for key, widget in self.header_widgets.items():
-            new_header_mapping[key] = widget.text().upper()
-            
-        new_column_mapping = {}
-        for key, widget in self.column_widgets.items():
-            # Lese den ausgewählten Text aus der ComboBox
-            # und nehme nur den Spaltenbuchstaben am Anfang.
-            selected_text = widget.currentText()
-            new_column_mapping[key] = selected_text.split(' - ')[0]
-
-        new_output_columns = []
-        for row in range(self.layout_table.rowCount()):
-            data = self._get_row_data(row)
-            if data:
-                new_output_columns.append(data)
-            
-        new_config = self.config_manager.config
-        new_config["header_mapping"] = new_header_mapping
-        new_config["column_mapping"] = new_column_mapping
-        new_config["output_columns"] = new_output_columns
-        self.config_manager.save_config(new_config)
-        super().accept()
-
     def _populate_layout_table(self):
-        """Füllt die Layout-Tabelle mit den Daten aus der Konfiguration."""
         output_config = self.config_manager.config.get("output_columns", [])
-        available_ids = self._get_complete_source_ids()
-        
+        available_ids = self._get_all_available_sources()
         self.layout_table.setRowCount(len(output_config))
         for row_idx, col_data in enumerate(output_config):
             self._create_row_widgets(row_idx, col_data, available_ids)
 
-    def _add_layout_row(self):
-        """Fügt eine neue, leere benutzerdefinierte Zeile zur Layout-Tabelle hinzu."""
-        row = self.layout_table.rowCount()
-        self.layout_table.insertRow(row)
-        available_ids = self._get_complete_source_ids()
-        new_id = f"custom_{int(time.time() * 1000)}"
-        new_col_data = {
-            "id": new_id,
-            "type": "custom",
-            "header": "Neue Spalte",
-            "width_percent": 15,
-            "source_id": ""
-        }
-        self._create_row_widgets(row, new_col_data, available_ids)
-
-    def _remove_layout_row(self):
-        row = self.layout_table.currentRow()
-        if row >= 0:
-            item = self.layout_table.item(row, 0)
-            if item:
-                # ÄNDERUNG: Greife auf den 'type' im gespeicherten Dictionary zu.
-                stored_data = item.data(QtCore.Qt.ItemDataRole.UserRole)
-                if isinstance(stored_data, dict) and stored_data.get("type") == "custom":
-                    self.layout_table.removeRow(row)
-                else:
-                    QtWidgets.QMessageBox.warning(self, "Fehler", "Standard-Spalten können nicht entfernt werden.")
-
-    def _move_row_up(self):
-        """Bewegt die ausgewählte Zeile eine Position nach oben."""
-        row = self.layout_table.currentRow()
-        if row > 0:
-            data = self._get_row_data(row)
-            self.layout_table.removeRow(row)
-            self.layout_table.insertRow(row - 1)
-            self._create_row_widgets(row - 1, data, self._get_complete_source_ids())
-            self.layout_table.setCurrentCell(row - 1, 0)
-            
-    def _move_row_down(self):
-        """Bewegt die ausgewählte Zeile eine Position nach unten."""
-        row = self.layout_table.currentRow()
-        if 0 <= row < self.layout_table.rowCount() - 1:
-            data = self._get_row_data(row)
-            self.layout_table.removeRow(row)
-            self.layout_table.insertRow(row + 1)
-            self._create_row_widgets(row + 1, data, self._get_complete_source_ids())
-            self.layout_table.setCurrentCell(row + 1, 0)
-    
-    def _copy_row_content(self, from_row, to_row):
-        # Hilfsfunktion zum Kopieren von Zeileninhalten
-        data = { "header": self.layout_table.item(from_row, 0).text(), "type": self.layout_table.item(from_row, 0).data(QtCore.Qt.ItemDataRole.UserRole) }
-        source_widget = self.layout_table.cellWidget(from_row, 1)
-        if isinstance(source_widget, QtWidgets.QComboBox): data["source_id"] = source_widget.currentText()
-        else: 
+    def _get_row_data(self, row):
+        header_item = self.layout_table.item(row, 0)
+        if not header_item: return None
+        stored_data = header_item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not isinstance(stored_data, dict):
+            stored_data = {"id": None, "type": "custom"}
+        col_type = stored_data.get("type")
+        col_id = stored_data.get("id")
+        source_widget = self.layout_table.cellWidget(row, 1)
+        source_id = ""
+        if isinstance(source_widget, QtWidgets.QComboBox):
+            source_id = source_widget.currentText()
+        elif isinstance(source_widget, QtWidgets.QLabel):
             match = re.search(r'<i>(.*?) \(Standard\)</i>', source_widget.text())
-            if match: data["source_id"] = match.group(1)
-        
-        width_widget = self.layout_table.cellWidget(from_row, 2)
-        if width_widget: data["width_percent"] = width_widget.value()
-        
-        self._create_row_widgets(to_row, data, self.config_manager.get_all_available_data_ids())
+            source_id = match.group(1) if match else ''
+        width_widget = self.layout_table.cellWidget(row, 2)
+        return {"id": col_id, "header": header_item.text(), "width_percent": width_widget.value(), "source_id": source_id, "type": col_type}
 
-    def _get_complete_source_ids(self) -> list:
-        """
-        Erstellt eine vollständige Liste aller verfügbaren Daten-IDs durch die Kombination
-        von Konfiguration, generierten Feldern und den Spalten aus der Muster-Stückliste.
-        Dies ist die korrigierte Logik, um das Problem zu beheben.
-        """
-        # 1. Felder aus der bestehenden Konfiguration (z.B. POS, Teilenummer)
-        input_fields_from_config = list(self.config_manager.config.get("column_mapping", {}).keys())
-
-        # 2. Vom Programm generierte Felder
-        generated_fields = [
-            "Benennung_Formatiert", "Menge",
-            "Bestellnummer_Kunde", "Information", "Seite"
-        ]
-
-        # 3. Felder, die aus den Spaltenüberschriften der Muster-Stückliste stammen
-        # self.available_columns enthält Strings wie "A - POS", "R - Gewicht"
-        fields_from_sample_bom = []
-        for col_str in self.available_columns:
-            if ' - ' in col_str:
-                # Extrahiere den Namen nach dem Trennzeichen ' - '
-                field_name = col_str.split(' - ', 1)[1]
-                fields_from_sample_bom.append(field_name)
-
-        # 4. Alle Quellen zusammenführen, Duplikate entfernen und sortieren
-        all_fields = set(input_fields_from_config + generated_fields + fields_from_sample_bom)
-
-        # Gib eine sortierte Liste mit einer leeren Start-Option zurück
-        return [""] + sorted(list(all_fields))

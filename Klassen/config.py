@@ -56,7 +56,21 @@ class ConfigManager:
                 {"id": "std_bestellnr", "header": "Bestellnummer", "width_percent": 22, "source_id": "Bestellnummer_Kunde", "type": "standard"},
                 {"id": "std_info", "header": "Information", "width_percent": 22, "source_id": "Information", "type": "standard"},
                 {"id": "std_seite", "header": "Seite", "width_percent": 8, "source_id": "Seite", "type": "standard"}
-            ]
+            ],
+            "generation_rules": {
+                # Standardregel für die Benennung: Kombiniert zwei Felder mit Zeilenumbruch
+                "Benennung_Formatiert": {
+                  "type": "combine",
+                  "sources": ["Benennung", "Zusatzbenennung"],
+                  "separator": "\\n"
+                },
+                # Standardregel für die Bestellnummer: Nimmt das erste verfügbare Feld
+                "Bestellnummer_Kunde": {
+                  "type": "prioritized_list",
+                  "sources": ["AFPS", "Teilenummer", "Hersteller_Nr"]
+                }
+            }
+
         }
 
     def get_all_available_data_ids(self) -> list:
@@ -70,6 +84,10 @@ class ConfigManager:
             "Bestellnummer_Kunde", "Information", "Seite"
         ]
         all_fields = sorted(list(set(input_fields + generated_fields)))
+        generated_fields = list(self.config.get("generation_rules", {}).keys())
+        manual_fields = ["Seite"]
+
+        all_fields = sorted(list(set(input_fields + generated_fields + manual_fields)))
         return [""] + all_fields # Leere Option hinzufügen
 
     def _load_config(self):
