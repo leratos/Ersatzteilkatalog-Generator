@@ -3,13 +3,12 @@ import os
 import sys
 import shutil
 import json
-import openpyxl
+
 from functools import partial
 from Klassen.config import ConfigManager
 from Klassen.generator import DocxGenerator
 from Klassen.stueckliste import BomProcessor
 from Klassen.editor_ui import ConfigEditorWindow
-from openpyxl.utils import get_column_letter
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, project_path: str):
@@ -48,7 +47,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.save_button = QtWidgets.QPushButton("Auswahl speichern")
         self.load_button = QtWidgets.QPushButton("Auswahl laden")
         self.info_button = QtWidgets.QPushButton("Info / Copyright")
-        self.config_button = QtWidgets.QPushButton("Editor")
+        self.config_button = QtWidgets.QPushButton("Konfiguration-Editor")
 
         # --- Layout ---
         top_layout = QtWidgets.QHBoxLayout()
@@ -99,27 +98,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree_widget.setColumnCount(len(headers))
         self.tree_widget.setHeaderLabels(headers)
 
-        # Setzt die Spaltenbreiten basierend auf den Prozentwerten in der Konfig
-        # Dies ist eine Annäherung, da QTreeWidget anders skaliert
         header = self.tree_widget.header()
-
-        benennung_col_index = -1
-
         for i, col_config in enumerate(self.output_column_configs):
-            if i == benennung_col_index:
-                # Die 'Benennung'-Spalte füllt den übrigen Platz
+            # Strech für die Benennungs-Spalte, interaktiv für alle anderen
+            if col_config.get("id") == "std_benennung":
                 header.setSectionResizeMode(i, QtWidgets.QHeaderView.ResizeMode.Stretch)
             else:
-                # Alle anderen Spalten sind durch den Nutzer anpassbar
                 header.setSectionResizeMode(i, QtWidgets.QHeaderView.ResizeMode.Interactive)
-            
-            # Setze eine initiale Breite als Anhaltspunkt, um zu schmale Spalten zu vermeiden
             self.tree_widget.setColumnWidth(i, col_config.get("width_percent", 10) * 4)
         
-        # Stelle sicher, dass die erste Spalte ('Pos') eine Mindestbreite hat
-        if header.count() > 0:
-            header.resizeSection(0, 50)
-
+        if header.count() > 0: 
+            header.resizeSection(0, 50) # Mindestbreite für Pos.
         self.tree_widget.blockSignals(False)
 
     def _find_button_column_index(self) -> int:
@@ -140,15 +129,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _open_config_editor(self):
         """
-        Liest die Spalten der aktuellen Hauptstückliste aus und öffnet den Editor.
+        Öffnet den zentralen Konfigurations-Editor.
+        Wenn Änderungen gespeichert werden, wird das gesamte Projekt neu geladen,
+        um die neuen Regeln und Layouts sofort anzuwenden.
         """
         main_bom_znr = self.assembly_selector.currentText()
         main_bom_obj = self.all_boms.get(main_bom_znr)
 
-        if not main_bom_obj:
-            QtWidgets.QMessageBox.warning(self, "Fehler", "Bitte zuerst eine Hauptbaugruppe auswählen.")
-            return
-        excel_columns = self._get_excel_headers(main_bom_obj.filepath)
+        excel_columns = []
+        if main_bom_obj:
+             try:
+                from openpyxl import load_workbook
+                from openpyxl.utils import get_column_letter
+                workbook = load_workbook(main_bom_obj.filepath, read_only=True, data_only=True)
+                sheet = workbook['Import']
+                for cell in sheet[5]:
+                    if cell.value:
+                        excel_columns.append(f"{get_column_letter(cell.column)} - {cell.value}")
+             except Exception as e:
+                print(f"Fehler beim Lesen der Muster-Header für den Editor: {e}")
+
 
         """Öffnet den Konfigurations-Editor-Dialog."""
         editor_dialog = ConfigEditorWindow(self.config, excel_columns, self)
@@ -202,7 +202,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No, 
                 QtWidgets.QMessageBox.StandardButton.Yes)
             if reply == QtWidgets.QMessageBox.StandardButton.Yes: self._setup_new_project(boms_path)
-            else: self.close(); return
+            else:
+                self.close()
+                return
         else:
             self._load_project_data()
             self._auto_load_save_file()
