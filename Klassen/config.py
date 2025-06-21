@@ -69,6 +69,7 @@ class ConfigManager:
                   "type": "prioritized_list",
                   "sources": ["AFPS", "Teilenummer", "Hersteller_Nr"]
                 }
+
             },
             "table_styles": {
               "base_style": "Table Grid",

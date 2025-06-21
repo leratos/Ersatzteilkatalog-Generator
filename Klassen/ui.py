@@ -10,6 +10,7 @@ Komponenten wie dem Konfigurations-Editor und dem Katalog-Generator.
 import json
 import os
 import shutil
+
 import sys
 from functools import partial
 
@@ -19,7 +20,6 @@ from Klassen.config import ConfigManager
 from Klassen.editor_ui import ConfigEditorWindow
 from Klassen.generator import DocxGenerator
 from Klassen.stueckliste import BomProcessor
-
 
 class MainWindow(QtWidgets.QMainWindow):
     """Das Hauptfenster der Anwendung."""
@@ -111,6 +111,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.info_button.clicked.connect(self._show_info_dialog)
         self.config_button.clicked.connect(self._open_config_editor)
 
+
     def _initialize_project(self):
         """Prüft, ob ein Projekt existiert oder neu angelegt werden soll."""
         boms_path = os.path.join(self.project_path, "stücklisten")
@@ -119,12 +120,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 self,
                 "Neues Projekt",
                 "Der ausgewählte Ordner scheint kein Projekt zu sein. Möchten Sie hier ein neues Projekt erstellen?",
+
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.No,
                 QtWidgets.QMessageBox.StandardButton.Yes,
             )
             if reply == QtWidgets.QMessageBox.StandardButton.Yes:
                 self._setup_new_project(boms_path)
+
             else:
                 self.close()
                 return
