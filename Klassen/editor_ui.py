@@ -6,13 +6,15 @@ Es ermöglicht dem Benutzer die Bearbeitung von:
 1. Spaltenzuordnung (Import)
 2. Katalog-Layout (Export)
 3. Setzregeln (Daten-Generierung)
+4. Tabellen-Design (Präsentation)
 """
 
 import re
 import time
 from functools import partial
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
+
 
 
 class ConfigEditorWindow(QtWidgets.QDialog):
@@ -48,6 +50,9 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self._connect_signals()
         self._populate_target_fields_list()
 
+        self._load_design_settings()
+
+
         if self.target_list.count() > 0:
             self.target_list.setCurrentRow(0)
         self._update_total_width()
@@ -66,19 +71,63 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.layout_tab = QtWidgets.QWidget()
         self.rules_tab = QtWidgets.QWidget()
 
+        self.design_tab = QtWidgets.QWidget() 
+
+
         self.tabs.addTab(self.mapping_tab, "Spaltenzuordnung (Import)")
         self.tabs.addTab(self.layout_tab, "Katalog-Layout (Export)")
         self.tabs.addTab(self.rules_tab, "Setzregeln (Generierung)")
 
+        self.tabs.addTab(self.design_tab, "Tabellen-Design") 
+
+
         self._setup_mapping_tab()
         self._setup_layout_tab()
         self._setup_rules_tab()
+
+        self._setup_design_tab() 
+
 
         self.button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         self.layout.addWidget(self.button_box)
+
+
+    def _setup_design_tab(self):
+        """Erstellt die UI für den 'Tabellen-Design'-Tab."""
+        layout = QtWidgets.QFormLayout(self.design_tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        group = QtWidgets.QGroupBox("Stil-Einstellungen für Katalog-Tabellen")
+        group_layout = QtWidgets.QFormLayout(group)
+        group_layout.setSpacing(10)
+        
+        self.style_name_input = QtWidgets.QLineEdit()
+        self.style_name_input.setToolTip("Geben Sie den Namen eines in Word verfügbaren Tabellen-Stils ein (z.B. 'Table Grid').")
+        group_layout.addRow("Word Tabellen-Stil:", self.style_name_input)
+        
+        self.header_bold_check = QtWidgets.QCheckBox("Überschrift fett formatieren")
+        group_layout.addRow(self.header_bold_check)
+        
+        self.shading_enabled_check = QtWidgets.QCheckBox("Zeilenschattierung (jede zweite Zeile)")
+        group_layout.addRow(self.shading_enabled_check)
+        
+        self.shading_color_input = QtWidgets.QLineEdit()
+        self.shading_color_input.setToolTip("Geben Sie die Farbe als Hexadezimalwert ohne '#' an (z.B. 'DAE9F8').")
+        
+        color_button = QtWidgets.QPushButton("Farbe auswählen...")
+        color_button.clicked.connect(self._pick_shading_color)
+        
+        color_layout = QtWidgets.QHBoxLayout()
+        color_layout.addWidget(self.shading_color_input)
+        color_layout.addWidget(color_button)
+        group_layout.addRow("Schattierungsfarbe (HEX):", color_layout)
+        
+        layout.addRow(group)
+        self.design_tab.setLayout(layout)
 
     def _setup_mapping_tab(self):
         """Erstellt die UI für den 'Spaltenzuordnung'-Tab."""
@@ -308,6 +357,15 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self._populate_conditional_combos()
         self._load_rule_for_target(self.current_target_field)
 
+
+    def _load_design_settings(self):
+        """Lädt die Design-Einstellungen und befüllt die UI."""
+        styles = self.config_manager.config.get("table_styles", {})
+        self.style_name_input.setText(styles.get("base_style", "Table Grid"))
+        self.header_bold_check.setChecked(styles.get("header_bold", True))
+        self.shading_enabled_check.setChecked(styles.get("shading_enabled", True))
+        self.shading_color_input.setText(styles.get("shading_color", "DAE9F8"))
+
     def _load_rule_for_target(self, target_field: str):
         """Lädt die Regel für das ausgewählte Feld und stellt die UI ein."""
         rule = self.current_rules.get(target_field, {})
@@ -376,12 +434,21 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             data for row in range(self.layout_table.rowCount()) if (data := self._get_row_data(row))
         ]
 
+        new_table_styles = {
+            "base_style": self.style_name_input.text(),
+            "header_bold": self.header_bold_check.isChecked(),
+            "shading_enabled": self.shading_enabled_check.isChecked(),
+            "shading_color": self.shading_color_input.text()
+        }
+
         new_config = self.config_manager.config
         new_config.update({
             "header_mapping": new_header_mapping,
             "column_mapping": new_column_mapping,
             "output_columns": new_output_columns,
-            "generation_rules": self.current_rules
+
+            "generation_rules": self.current_rules,
+            "table_styles": new_table_styles
         })
         self.config_manager.save_config(new_config)
         super().accept()
@@ -488,7 +555,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
                 return
             self.current_rules[text] = {"type": "prioritized_list", "sources": []}
             self._populate_target_fields_list()
-            # Finde und selektiere das neue Item in der Liste
+
             items = self.target_list.findItems(text, QtCore.Qt.MatchFlag.MatchExactly)
             if items:
                 self.target_list.setCurrentItem(items[0])
@@ -536,30 +603,10 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.else_source_combo.clear()
         self.else_source_combo.addItems(available_sources)
             
-    def _setup_mapping_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.mapping_tab)
-        header_group = QtWidgets.QGroupBox("Header-Felder (Zellen)")
-        header_layout = QtWidgets.QGridLayout()
-        header_group.setLayout(header_layout)
-        self.header_widgets = {}
-        header_config = self.config_manager.config.get("header_mapping", {})
-        for row, (key, value) in enumerate(header_config.items()):
-            label = QtWidgets.QLabel(f"{key}:")
-            line_edit = QtWidgets.QLineEdit(value)
-            self.header_widgets[key] = line_edit
-            header_layout.addWidget(label, row, 0)
-            header_layout.addWidget(line_edit, row, 1)
-
-        self.column_group = QtWidgets.QGroupBox("Positions-Felder (Spalten)")
-        self.column_layout = QtWidgets.QGridLayout()
-        self.column_group.setLayout(self.column_layout)
-        self.column_widgets = {}
-        self._create_column_comboboxes()
-        layout.addWidget(header_group)
-        layout.addWidget(self.column_group)
-        layout.addStretch()
 
     def _create_column_comboboxes(self):
+        """Erstellt oder aktualisiert die Dropdowns für die Spaltenzuordnung."""
+
         while self.column_layout.count():
             child = self.column_layout.takeAt(0)
             if child.widget():
@@ -581,6 +628,9 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             self.column_layout.addWidget(combo_box, row, 1)
             
     def _populate_layout_table(self):
+
+        """Füllt die Layout-Tabelle mit Daten aus der Konfiguration."""
+
         output_config = self.config_manager.config.get("output_columns", [])
         available_ids = self._get_all_available_sources()
         self.layout_table.setRowCount(len(output_config))
@@ -588,6 +638,9 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             self._create_row_widgets(row_idx, col_data, available_ids)
 
     def _get_row_data(self, row):
+
+        """Liest die Daten aus einer Zeile der Layout-Tabelle."""
+  
         header_item = self.layout_table.item(row, 0)
         if not header_item: return None
         stored_data = header_item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -604,4 +657,14 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             source_id = match.group(1) if match else ''
         width_widget = self.layout_table.cellWidget(row, 2)
         return {"id": col_id, "header": header_item.text(), "width_percent": width_widget.value(), "source_id": source_id, "type": col_type}
-
+        
+    def _pick_shading_color(self):
+        """Öffnet einen Farbdialog und setzt den Hex-Wert."""
+        current_color = self.shading_color_input.text()
+        dialog = QtWidgets.QColorDialog(self)
+        if QtGui.QColor.isValidColor(f"#{current_color}"):
+            dialog.setCurrentColor(QtGui.QColor(f"#{current_color}"))
+        
+        if dialog.exec():
+            color = dialog.selectedColor()
+            self.shading_color_input.setText(color.name().replace("#", "").upper())
