@@ -48,6 +48,11 @@ class DocxGenerator:
         try:
             self._update_header_footer()
             self._create_cover_sheet()
+            formatting_options = self.config.config.get("formatting_options", {})
+            num_blank_pages = formatting_options.get("blank_pages_before_toc", 0)
+            for _ in range(num_blank_pages):
+                self.doc.add_page_break()
+
             self._create_toc()
             self._create_assembly_section(self.data)
             self._replace_graphic_placeholders()
@@ -92,10 +97,12 @@ class DocxGenerator:
             if doc.TablesOfContents.Count > 0:
                 toc_text = doc.TablesOfContents(1).Range.Text
                 pattern = re.compile(
-                    r"\((\d{2}\.\d{3}-\d{1,3}(?:\.\d{1,3})?)(?:.*?)\)[\s\S]*?\t(\d+)"
+                    r"([A-Z0-9\.\- ]+-[A-Z0-9\.\- ]+).*?\t(\d+)", re.IGNORECASE
                 )
                 for match in pattern.finditer(toc_text):
-                    page_map[match.group(1).replace(" ", "")] = match.group(2)
+                    key = match.group(1).strip()
+                    key = key.split('(')[0].strip()
+                    page_map[key] = match.group(2)
             
             if not page_map and doc.TablesOfContents.Count > 0:
                 print("    [WARNUNG] Konnte keine Seitenzahlen aus dem Inhaltsverzeichnis extrahieren.")
@@ -132,6 +139,7 @@ class DocxGenerator:
         table_styles = self.config.config.get("table_styles", {})
         base_style = table_styles.get("base_style", "Table Grid")
         header_bold = table_styles.get("header_bold", True)
+        header_shading_color = table_styles.get("header_shading_color", "4F81BD")
         shading_enabled = table_styles.get("shading_enabled", True)
         shading_color = table_styles.get("shading_color", "DAE9F8")
 
@@ -153,6 +161,9 @@ class DocxGenerator:
             if header_bold:
                 cell.paragraphs[0].runs[0].font.bold = True
 
+            if header_shading_color:
+                self._set_cell_shading(cell, header_shading_color)
+
         sorted_items = sorted(
             items,
             key=lambda item: (
@@ -173,7 +184,8 @@ class DocxGenerator:
                 if col_id == "std_seite":
                     if item.get("is_assembly", False) and item.get("Teilenummer"):
                         teilenummer_raw = str(item.get("Teilenummer", ""))
-                        clean_znr = teilenummer_raw.split("(")[0].strip().replace(" ", "")
+                        no_newlines = teilenummer_raw.replace('\n', '').replace('\r', '')
+                        clean_znr = no_newlines.split("(")[0].strip().replace(" ", "")
                         if clean_znr:
                             cell_text = f"[REF:{clean_znr}]"
                 else:
@@ -285,8 +297,21 @@ class DocxGenerator:
                                 if key in run.text: run.text = run.text.replace(key, str(value))
 
     def _create_assembly_section(self, assembly_data):
-        if not assembly_data: return
-        title = f"{assembly_data.get('Benennung', '')} ({assembly_data.get('Teilenummer', '')})"
+        if not assembly_data:
+            return
+        formatting_options = self.config.config.get("formatting_options", {})
+        title_format = formatting_options.get(
+            "assembly_title_format", "{benennung} ({teilenummer})"
+        )
+        
+        add_space = formatting_options.get("add_space_after_title", True)
+        table_on_new_page = formatting_options.get("table_on_new_page", False)
+        
+        title = title_format.format(
+            benennung=assembly_data.get('Benennung', ''),
+            teilenummer=assembly_data.get('Teilenummer', '')
+        )
+        
         heading = self.doc.add_heading(title, level=1)
         heading.paragraph_format.keep_with_next = True
         
@@ -296,10 +321,16 @@ class DocxGenerator:
         elif 'Heading 1' in styles:
             heading.style = styles['Heading 1']
 
+        if add_space:
+            self.doc.add_paragraph()
+
         p_grafik = self.doc.add_paragraph()
         p_grafik.add_run(f"[GRAFIK_PLATZHALTER_{assembly_data.get('Teilenummer')}]")
         p_grafik.paragraph_format.keep_with_next = True
-        self.doc.add_paragraph()
+        if table_on_new_page:
+            self.doc.add_page_break()
+        else:
+            self.doc.add_paragraph()
         
         if assembly_data.get('children'):
             self._create_table_for_assembly(assembly_data.get('children'))

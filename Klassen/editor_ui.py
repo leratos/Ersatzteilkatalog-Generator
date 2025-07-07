@@ -71,21 +71,21 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.layout_tab = QtWidgets.QWidget()
         self.rules_tab = QtWidgets.QWidget()
 
-        self.design_tab = QtWidgets.QWidget() 
+        self.design_tab = QtWidgets.QWidget()
 
 
         self.tabs.addTab(self.mapping_tab, "Spaltenzuordnung (Import)")
         self.tabs.addTab(self.layout_tab, "Katalog-Layout (Export)")
         self.tabs.addTab(self.rules_tab, "Setzregeln (Generierung)")
 
-        self.tabs.addTab(self.design_tab, "Tabellen-Design") 
+        self.tabs.addTab(self.design_tab, "Tabellen-Design")
 
 
         self._setup_mapping_tab()
         self._setup_layout_tab()
         self._setup_rules_tab()
 
-        self._setup_design_tab() 
+        self._setup_design_tab()
 
 
         self.button_box = QtWidgets.QDialogButtonBox(
@@ -97,8 +97,8 @@ class ConfigEditorWindow(QtWidgets.QDialog):
 
     def _setup_design_tab(self):
         """Erstellt die UI für den 'Tabellen-Design'-Tab."""
-        layout = QtWidgets.QFormLayout(self.design_tab)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout = QtWidgets.QVBoxLayout(self.design_tab)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(15)
 
         group = QtWidgets.QGroupBox("Stil-Einstellungen für Katalog-Tabellen")
@@ -112,6 +112,14 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.header_bold_check = QtWidgets.QCheckBox("Überschrift fett formatieren")
         group_layout.addRow(self.header_bold_check)
         
+        self.header_shading_color_input = QtWidgets.QLineEdit()
+        header_color_button = QtWidgets.QPushButton("Farbe auswählen...")
+        header_color_button.clicked.connect(lambda: self._pick_shading_color(self.header_shading_color_input))
+        header_color_layout = QtWidgets.QHBoxLayout()
+        header_color_layout.addWidget(self.header_shading_color_input)
+        header_color_layout.addWidget(header_color_button)
+        group_layout.addRow("Header-Hintergrundfarbe (HEX):", header_color_layout)
+
         self.shading_enabled_check = QtWidgets.QCheckBox("Zeilenschattierung (jede zweite Zeile)")
         group_layout.addRow(self.shading_enabled_check)
         
@@ -119,15 +127,35 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.shading_color_input.setToolTip("Geben Sie die Farbe als Hexadezimalwert ohne '#' an (z.B. 'DAE9F8').")
         
         color_button = QtWidgets.QPushButton("Farbe auswählen...")
-        color_button.clicked.connect(self._pick_shading_color)
+        color_button.clicked.connect(lambda: self._pick_shading_color(self.shading_color_input))
         
         color_layout = QtWidgets.QHBoxLayout()
         color_layout.addWidget(self.shading_color_input)
         color_layout.addWidget(color_button)
-        group_layout.addRow("Schattierungsfarbe (HEX):", color_layout)
+        group_layout.addRow("Zeilen-Schattierungsfarbe (HEX):", color_layout)
         
-        layout.addRow(group)
-        self.design_tab.setLayout(layout)
+        layout.addWidget(group)
+        title_group = QtWidgets.QGroupBox("Formatierung der Baugruppen-Seite")
+        title_layout = QtWidgets.QFormLayout(title_group)
+        self.assembly_title_format_input = QtWidgets.QLineEdit()
+        self.assembly_title_format_input.setToolTip("Verfügbare Platzhalter: {benennung}, {teilenummer}")
+        title_layout.addRow("Format-String für Überschrift:", self.assembly_title_format_input)
+        
+        self.space_after_title_check = QtWidgets.QCheckBox("Leerraum zwischen Titel und Grafik einfügen")
+        self.table_on_new_page_check = QtWidgets.QCheckBox("Tabelle auf neuer Seite beginnen (nach Grafik)")
+        title_layout.addRow(self.space_after_title_check)
+        title_layout.addRow(self.table_on_new_page_check)
+        
+        layout.addWidget(title_group)
+        page_group = QtWidgets.QGroupBox("Zusätzliche Seiten")
+        page_layout = QtWidgets.QFormLayout(page_group)
+        self.blank_pages_spinbox = QtWidgets.QSpinBox()
+        self.blank_pages_spinbox.setRange(0, 10)
+        self.blank_pages_spinbox.setToolTip("Fügt eine bestimmte Anzahl leerer Seiten vor dem Inhaltsverzeichnis ein (z.B. für Disclaimer).")
+        page_layout.addRow("Leere Seiten vor Inhaltsverzeichnis:", self.blank_pages_spinbox)
+        layout.addWidget(page_group)
+
+        layout.addStretch()
 
     def _setup_mapping_tab(self):
         """Erstellt die UI für den 'Spaltenzuordnung'-Tab."""
@@ -259,7 +287,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             layout.addWidget(QtWidgets.QLabel("<b>Funktion:</b> Nimmt den Wert des ersten Feldes in der Liste, das nicht leer ist."))
             layout.addWidget(QtWidgets.QLabel("Quell-Felder (in Priorität von oben nach unten):"))
             list_widget = self.prio_list_widget = QtWidgets.QListWidget()
-        else:  # 'combine'
+        else:
             layout.addWidget(QtWidgets.QLabel("<b>Funktion:</b> Verbindet die Werte mehrerer Felder mit einem Trennzeichen."))
             layout.addWidget(QtWidgets.QLabel("Zu kombinierende Quell-Felder (in Reihenfolge):"))
             list_widget = self.combine_list_widget = QtWidgets.QListWidget()
@@ -363,8 +391,17 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         styles = self.config_manager.config.get("table_styles", {})
         self.style_name_input.setText(styles.get("base_style", "Table Grid"))
         self.header_bold_check.setChecked(styles.get("header_bold", True))
+        self.header_shading_color_input.setText(styles.get("header_shading_color", "4F81BD"))
         self.shading_enabled_check.setChecked(styles.get("shading_enabled", True))
         self.shading_color_input.setText(styles.get("shading_color", "DAE9F8"))
+
+        formatting = self.config_manager.config.get("formatting_options", {})
+        self.assembly_title_format_input.setText(
+            formatting.get("assembly_title_format", "{benennung} ({teilenummer})")
+        )
+        self.space_after_title_check.setChecked(formatting.get("add_space_after_title", True))
+        self.table_on_new_page_check.setChecked(formatting.get("table_on_new_page", False))
+        self.blank_pages_spinbox.setValue(formatting.get("blank_pages_before_toc", 0))
 
     def _load_rule_for_target(self, target_field: str):
         """Lädt die Regel für das ausgewählte Feld und stellt die UI ein."""
@@ -437,8 +474,16 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         new_table_styles = {
             "base_style": self.style_name_input.text(),
             "header_bold": self.header_bold_check.isChecked(),
+            "header_shading_color": self.header_shading_color_input.text(),
             "shading_enabled": self.shading_enabled_check.isChecked(),
             "shading_color": self.shading_color_input.text()
+        }
+
+        new_formatting_options = {
+            "assembly_title_format": self.assembly_title_format_input.text(),
+            "add_space_after_title": self.space_after_title_check.isChecked(),
+            "table_on_new_page": self.table_on_new_page_check.isChecked(),
+            "blank_pages_before_toc": self.blank_pages_spinbox.value()
         }
 
         new_config = self.config_manager.config
@@ -448,7 +493,8 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             "output_columns": new_output_columns,
 
             "generation_rules": self.current_rules,
-            "table_styles": new_table_styles
+            "table_styles": new_table_styles,
+            "formatting_options": new_formatting_options
         })
         self.config_manager.save_config(new_config)
         super().accept()
@@ -658,13 +704,13 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         width_widget = self.layout_table.cellWidget(row, 2)
         return {"id": col_id, "header": header_item.text(), "width_percent": width_widget.value(), "source_id": source_id, "type": col_type}
         
-    def _pick_shading_color(self):
-        """Öffnet einen Farbdialog und setzt den Hex-Wert."""
-        current_color = self.shading_color_input.text()
+    def _pick_shading_color(self, target_line_edit):
+        """Öffnet einen Farbdialog und setzt den Hex-Wert im Ziel-LineEdit."""
+        current_color = target_line_edit.text()
         dialog = QtWidgets.QColorDialog(self)
         if QtGui.QColor.isValidColor(f"#{current_color}"):
             dialog.setCurrentColor(QtGui.QColor(f"#{current_color}"))
         
         if dialog.exec():
             color = dialog.selectedColor()
-            self.shading_color_input.setText(color.name().replace("#", "").upper())
+            target_line_edit.setText(color.name().replace("#", "").upper())

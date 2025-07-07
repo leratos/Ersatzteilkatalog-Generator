@@ -47,7 +47,7 @@ class ConfigManager:
                 "Hersteller": "K",
                 "Hersteller_Nr": "L",
                 "AFPS": "P",
-                "Teileart": "M" 
+                "Teileart": "M"
             },
             "output_columns": [
                 {"id": "std_pos", "header": "Pos.", "width_percent": 8, "source_id": "POS", "type": "standard"},
@@ -60,22 +60,29 @@ class ConfigManager:
             "generation_rules": {
                 # Standardregel für die Benennung: Kombiniert zwei Felder mit Zeilenumbruch
                 "Benennung_Formatiert": {
-                  "type": "combine",
-                  "sources": ["Benennung", "Zusatzbenennung"],
-                  "separator": "\\n"
+                    "type": "combine",
+                    "sources": ["Benennung", "Zusatzbenennung"],
+                    "separator": "\\n"
                 },
                 # Standardregel für die Bestellnummer: Nimmt das erste verfügbare Feld
                 "Bestellnummer_Kunde": {
-                  "type": "prioritized_list",
-                  "sources": ["AFPS", "Teilenummer", "Hersteller_Nr"]
+                    "type": "prioritized_list",
+                    "sources": ["AFPS", "Teilenummer", "Hersteller_Nr"]
                 }
 
             },
             "table_styles": {
               "base_style": "Table Grid",
               "header_bold": True,
+              "header_shading_color": "4F81BD",
               "shading_enabled": True,
               "shading_color": "DAE9F8"
+            },
+            "formatting_options": {
+                "assembly_title_format": "{benennung} ({teilenummer})",
+                "add_space_after_title": True,
+                "table_on_new_page": False,
+                "blank_pages_before_toc": 0  # NEU
             }
 
         }
@@ -85,7 +92,9 @@ class ConfigManager:
         Gibt eine Liste aller möglichen Daten-IDs zurück, die für die Ausgabe
         verwendet werden können.
         """
-        input_fields = list(self.config.get("column_mapping", {}).keys())
+        input_fields = list(
+            self.config.get("column_mapping", {}).keys()
+            )
         generated_fields = [
             "Benennung_Formatiert", "Menge", 
             "Bestellnummer_Kunde", "Information", "Seite"
@@ -95,7 +104,7 @@ class ConfigManager:
         manual_fields = ["Seite"]
 
         all_fields = sorted(list(set(input_fields + generated_fields + manual_fields)))
-        return [""] + all_fields # Leere Option hinzufügen
+        return [""] + all_fields
 
     def _load_config(self):
         """
@@ -117,6 +126,12 @@ class ConfigManager:
                     loaded_config[key] = value
                     is_dirty = True
             # Speichere die ggf. ergänzte Konfiguration zurück
+                elif isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        if sub_key not in loaded_config[key]:
+                            loaded_config[key][sub_key] = sub_value
+                            is_dirty = True
+
             if is_dirty:
                 self.save_config(loaded_config)
             return loaded_config
@@ -133,7 +148,9 @@ class ConfigManager:
 
     def get_column_map(self) -> dict:
         """Gibt das Mapping von internem Namen zu Excel-Spaltenbuchstabe zurück."""
-        return self.config.get("column_mapping", self._default_config["column_mapping"])
+        return self.config.get(
+            "column_mapping", self._default_config["column_mapping"]
+        )
 
     def get_column_indices(self) -> dict:
         """
@@ -143,7 +160,8 @@ class ConfigManager:
         column_map = self.config.get("column_mapping", {})
         index_map = {}
         for name, letter in column_map.items():
-            if not letter: continue
+            if not letter:
+                continue
             try:
                 # Konvertiert 'A' -> 1, 'B' -> 2, etc. und zieht 1 ab für 0-basiert.
                 index_map[name] = column_index_from_string(letter) - 1
