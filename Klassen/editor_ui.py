@@ -101,9 +101,44 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(15)
 
+        # --- Gruppe für Deckblatt ---
+        cover_group = QtWidgets.QGroupBox("Deckblatt-Optionen")
+        cover_layout = QtWidgets.QFormLayout(cover_group)
+        self.cover_type_combo = QtWidgets.QComboBox()
+        self.cover_type_combo.addItems(["Standard (Titel + Bild)", "Externe DOCX-Datei"])
+        self.cover_path_input = QtWidgets.QLineEdit()
+        self.cover_path_input.setReadOnly(True)
+        cover_path_button = QtWidgets.QPushButton("...")
+        cover_path_button.clicked.connect(lambda: self._select_external_doc(self.cover_path_input))
+        cover_path_layout = QtWidgets.QHBoxLayout()
+        cover_path_layout.addWidget(self.cover_path_input)
+        cover_path_layout.addWidget(cover_path_button)
+        cover_layout.addRow("Deckblatt-Typ:", self.cover_type_combo)
+        cover_layout.addRow("Pfad zur DOCX:", cover_path_layout)
+        layout.addWidget(cover_group)
+
+        # --- Gruppe für zusätzliche Seiten ---
+        pages_group = QtWidgets.QGroupBox("Zusätzliche Seiten (vor Inhaltsverzeichnis)")
+        pages_layout = QtWidgets.QFormLayout(pages_group)
+        self.pages_type_combo = QtWidgets.QComboBox()
+        self.pages_type_combo.addItems(["Leere Seiten", "Externe DOCX-Datei"])
+        self.blank_pages_spinbox = QtWidgets.QSpinBox()
+        self.blank_pages_spinbox.setRange(0, 10)
+        self.pages_path_input = QtWidgets.QLineEdit()
+        self.pages_path_input.setReadOnly(True)
+        pages_path_button = QtWidgets.QPushButton("...")
+        pages_path_button.clicked.connect(lambda: self._select_external_doc(self.pages_path_input))
+        pages_path_layout = QtWidgets.QHBoxLayout()
+        pages_path_layout.addWidget(self.pages_path_input)
+        pages_path_layout.addWidget(pages_path_button)
+        pages_layout.addRow("Seiten-Typ:", self.pages_type_combo)
+        pages_layout.addRow("Anzahl leerer Seiten:", self.blank_pages_spinbox)
+        pages_layout.addRow("Pfad zur DOCX:", pages_path_layout)
+        layout.addWidget(pages_group)
+
+        # --- Gruppe für Tabellen-Stile ---
         group = QtWidgets.QGroupBox("Stil-Einstellungen für Katalog-Tabellen")
         group_layout = QtWidgets.QFormLayout(group)
-        group_layout.setSpacing(10)
         
         self.style_name_input = QtWidgets.QLineEdit()
         self.style_name_input.setToolTip("Geben Sie den Namen eines in Word verfügbaren Tabellen-Stils ein (z.B. 'Table Grid').")
@@ -112,6 +147,13 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.header_bold_check = QtWidgets.QCheckBox("Überschrift fett formatieren")
         group_layout.addRow(self.header_bold_check)
         
+        self.header_font_color_input = QtWidgets.QLineEdit()
+        header_font_color_button = QtWidgets.QPushButton("Farbe auswählen...")
+        header_font_color_button.clicked.connect(lambda: self._pick_shading_color(self.header_font_color_input))
+        header_font_color_layout = QtWidgets.QHBoxLayout()
+        header_font_color_layout.addWidget(self.header_font_color_input)
+        header_font_color_layout.addWidget(header_font_color_button)
+        group_layout.addRow("Header-Schriftfarbe (HEX):", header_font_color_layout)
         self.header_shading_color_input = QtWidgets.QLineEdit()
         header_color_button = QtWidgets.QPushButton("Farbe auswählen...")
         header_color_button.clicked.connect(lambda: self._pick_shading_color(self.header_shading_color_input))
@@ -143,17 +185,11 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         
         self.space_after_title_check = QtWidgets.QCheckBox("Leerraum zwischen Titel und Grafik einfügen")
         self.table_on_new_page_check = QtWidgets.QCheckBox("Tabelle auf neuer Seite beginnen (nach Grafik)")
+        self.toc_on_new_page_check = QtWidgets.QCheckBox("Inhaltsverzeichnis auf eigener Seite beginnen") # NEU
         title_layout.addRow(self.space_after_title_check)
         title_layout.addRow(self.table_on_new_page_check)
-        
+        title_layout.addRow(self.toc_on_new_page_check)
         layout.addWidget(title_group)
-        page_group = QtWidgets.QGroupBox("Zusätzliche Seiten")
-        page_layout = QtWidgets.QFormLayout(page_group)
-        self.blank_pages_spinbox = QtWidgets.QSpinBox()
-        self.blank_pages_spinbox.setRange(0, 10)
-        self.blank_pages_spinbox.setToolTip("Fügt eine bestimmte Anzahl leerer Seiten vor dem Inhaltsverzeichnis ein (z.B. für Disclaimer).")
-        page_layout.addRow("Leere Seiten vor Inhaltsverzeichnis:", self.blank_pages_spinbox)
-        layout.addWidget(page_group)
 
         layout.addStretch()
 
@@ -391,6 +427,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         styles = self.config_manager.config.get("table_styles", {})
         self.style_name_input.setText(styles.get("base_style", "Table Grid"))
         self.header_bold_check.setChecked(styles.get("header_bold", True))
+        self.header_font_color_input.setText(styles.get("header_font_color", "FFFFFF"))
         self.header_shading_color_input.setText(styles.get("header_shading_color", "4F81BD"))
         self.shading_enabled_check.setChecked(styles.get("shading_enabled", True))
         self.shading_color_input.setText(styles.get("shading_color", "DAE9F8"))
@@ -402,6 +439,11 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.space_after_title_check.setChecked(formatting.get("add_space_after_title", True))
         self.table_on_new_page_check.setChecked(formatting.get("table_on_new_page", False))
         self.blank_pages_spinbox.setValue(formatting.get("blank_pages_before_toc", 0))
+        self.toc_on_new_page_check.setChecked(formatting.get("toc_on_new_page", True))
+        self.cover_type_combo.setCurrentText("Externe DOCX-Datei" if formatting.get("cover_sheet_type") == "external_docx" else "Standard (Titel + Bild)")
+        self.cover_path_input.setText(formatting.get("cover_sheet_path", ""))
+        self.pages_type_combo.setCurrentText("Externe DOCX-Datei" if formatting.get("blank_pages_type") == "external_docx" else "Leere Seiten")
+        self.pages_path_input.setText(formatting.get("blank_pages_path", ""))
 
     def _load_rule_for_target(self, target_field: str):
         """Lädt die Regel für das ausgewählte Feld und stellt die UI ein."""
@@ -474,6 +516,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         new_table_styles = {
             "base_style": self.style_name_input.text(),
             "header_bold": self.header_bold_check.isChecked(),
+            "header_font_color": self.header_font_color_input.text(),
             "header_shading_color": self.header_shading_color_input.text(),
             "shading_enabled": self.shading_enabled_check.isChecked(),
             "shading_color": self.shading_color_input.text()
@@ -483,7 +526,12 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             "assembly_title_format": self.assembly_title_format_input.text(),
             "add_space_after_title": self.space_after_title_check.isChecked(),
             "table_on_new_page": self.table_on_new_page_check.isChecked(),
-            "blank_pages_before_toc": self.blank_pages_spinbox.value()
+            "blank_pages_before_toc": self.blank_pages_spinbox.value(),
+            "toc_on_new_page": self.toc_on_new_page_check.isChecked(),
+            "cover_sheet_type": "external_docx" if self.cover_type_combo.currentText() == "Externe DOCX-Datei" else "default",
+            "cover_sheet_path": self.cover_path_input.text(),
+            "blank_pages_type": "external_docx" if self.pages_type_combo.currentText() == "Externe DOCX-Datei" else "blank",
+            "blank_pages_path": self.pages_path_input.text()
         }
 
         new_config = self.config_manager.config
@@ -502,6 +550,12 @@ class ConfigEditorWindow(QtWidgets.QDialog):
     # --------------------------------------------------------------------------
     # --- Hilfsmethoden ---
     # --------------------------------------------------------------------------
+
+    def _select_external_doc(self, target_line_edit: QtWidgets.QLineEdit):
+        """Öffnet einen Datei-Dialog zur Auswahl einer DOCX-Datei."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "DOCX-Datei auswählen", "", "Word-Dokumente (*.docx)")
+        if path:
+            target_line_edit.setText(path)
 
     def _get_all_available_sources(self, exclude_field: str = None) -> list:
         """Sammelt alle verfügbaren Quell-Felder (Rohdaten + andere Regeln)."""

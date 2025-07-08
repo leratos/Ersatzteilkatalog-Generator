@@ -49,9 +49,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _setup_ui(self):
         """Erstellt alle UI-Elemente und ordnet sie im Layout an."""
+        self.setStatusBar(QtWidgets.QStatusBar(self))
         self.assembly_selector = QtWidgets.QComboBox()
         self.author_input = QtWidgets.QLineEdit()
         self.author_input.setPlaceholderText("Ihr Name")
+        self.doc_number_input = QtWidgets.QLineEdit()
+        self.doc_number_input.setPlaceholderText("z.B. 12345-A (EL)")
+
         self.cover_graphic_button = QtWidgets.QPushButton("Deckblatt-Grafik...")
         self.tree_widget = QtWidgets.QTreeWidget()
         self.tree_widget.setSelectionMode(
@@ -77,7 +81,8 @@ class MainWindow(QtWidgets.QMainWindow):
         top_layout.addWidget(self.assembly_selector, 2)
         top_layout.addWidget(QtWidgets.QLabel("Ersteller:"))
         top_layout.addWidget(self.author_input, 1)
-        top_layout.addWidget(self.cover_graphic_button)
+        top_layout.addWidget(QtWidgets.QLabel("Dokumentennr. (Schriftkopf):"))
+        top_layout.addWidget(self.doc_number_input, 1)
 
         bottom_layout = QtWidgets.QHBoxLayout()
         bottom_layout.addWidget(self.info_button)
@@ -166,8 +171,22 @@ class MainWindow(QtWidgets.QMainWindow):
         if not os.path.isdir(boms_path):
             return
 
-        self.config = ConfigManager(self.project_path)
-        self._update_tree_columns()
+        self.statusBar().showMessage("Lade Stücklisten, bitte warten...")
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        QtWidgets.QApplication.processEvents() # Stellt sicher, dass die UI aktualisiert wird
+
+        try:
+            self.config = ConfigManager(self.project_path)
+            self._update_tree_columns()
+
+            processor = BomProcessor(folder_path=boms_path, config_manager=self.config)
+            self.all_boms = processor.run()
+            self.load_data_into_ui(self.all_boms)
+        finally:
+            # NEU: Feedback zurücksetzen
+            QtWidgets.QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+
 
         processor = BomProcessor(folder_path=boms_path, config_manager=self.config)
         self.all_boms = processor.run()
@@ -327,7 +346,6 @@ class MainWindow(QtWidgets.QMainWindow):
         main_bom_obj = self.all_boms.get(main_bom_znr)
         if not main_bom_obj: return
         
-        # --- KORRIGIERT: Dynamische Pfad- und Filterlogik für .docm ---
         template_path_docm = os.path.join(self.project_path, "DOK-Vorlage.docm")
         template_path_docx = os.path.join(self.project_path, "DOK-Vorlage.docx")
         
@@ -351,17 +369,30 @@ class MainWindow(QtWidgets.QMainWindow):
             os.path.join(self.project_path, suggested_filename),
             f"{file_filter};;Alle Dateien (*.*)"
         )
-        # --- ENDE DER KORREKTUR ---
         
         if not output_path: return
         
         generator = DocxGenerator(
-            data=hierarchical_data, main_bom=main_bom_obj, author_name=self.author_input.text(),
+            data=hierarchical_data, main_bom=main_bom_obj, 
+            author_name=self.author_input.text(),
+            custom_doc_number=self.doc_number_input.text(),
             template_path=template_path, output_path=output_path,
             auto_update_fields=self.update_fields_checkbox.isChecked(),
             project_path=self.project_path, config_manager=self.config
         )
-        if generator.run():
+        # NEU: "Bitte warten"-Feedback
+        self.statusBar().showMessage("Erstelle Katalog, bitte warten...")
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        QtWidgets.QApplication.processEvents()
+
+        success = False
+        try:
+            success = generator.run()
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+
+        if success:
             self._show_generation_success_dialog(output_path)
         else:
             QtWidgets.QMessageBox.critical(self, "Fehler", "Beim Erstellen des Katalogs ist ein Fehler aufgetreten.")

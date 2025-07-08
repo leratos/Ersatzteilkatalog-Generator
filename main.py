@@ -14,7 +14,7 @@ Zuletzt geändert: 13.06.2025
 import sys
 import os
 import shutil
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 # Importiert die Hauptklasse der Benutzeroberfläche aus dem Klassen-Verzeichnis.
 from Klassen.ui import MainWindow
 
@@ -57,8 +57,24 @@ def main():
 
     # Erstellt das Hauptfenster und übergibt den Projektpfad, damit die
     # Klasse weiß, wo sie arbeiten soll.
+    pixmap_path = "logo.png"
+    if os.path.exists(pixmap_path):
+        pixmap = QtGui.QPixmap(pixmap_path)
+    else:
+        pixmap = QtGui.QPixmap()
+        
+    splash = QtWidgets.QSplashScreen(pixmap)
+    splash.showMessage(
+        "Initialisiere Projekt und lade Stücklisten...\nDies kann einen Moment dauern.",
+        QtCore.Qt.AlignmentFlag.AlignBottom | QtCore.Qt.AlignmentFlag.AlignCenter,
+        QtCore.Qt.black
+    )
+    splash.show()
+    app.processEvents()
+
     window = MainWindow(project_path=project_path)
     window.show()
+    splash.finish(window)
 
     # Startet die Anwendung und wartet auf Ereignisse (Klicks, etc.).
     # sys.exit sorgt für ein sauberes Beenden.

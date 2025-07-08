@@ -12,10 +12,10 @@ import re
 import sys
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm
+from docx.shared import Cm, RGBColor
 from PIL import Image
 
 
@@ -27,6 +27,7 @@ class DocxGenerator:
         data: dict,
         main_bom,
         author_name: str,
+        custom_doc_number: str,
         template_path: str,
         output_path: str,
         auto_update_fields: bool,
@@ -36,6 +37,7 @@ class DocxGenerator:
         self.data = data
         self.main_bom = main_bom
         self.author_name = author_name
+        self.custom_doc_number = custom_doc_number
         self.template_path = template_path
         self.output_path = output_path
         self.auto_update_fields = auto_update_fields
@@ -46,16 +48,15 @@ class DocxGenerator:
     def run(self) -> bool:
         """Führt den gesamten Prozess der Dokumenterstellung aus."""
         try:
-            self._update_header_footer()
-            self._create_cover_sheet()
             formatting_options = self.config.config.get("formatting_options", {})
-            num_blank_pages = formatting_options.get("blank_pages_before_toc", 0)
-            for _ in range(num_blank_pages):
-                self.doc.add_page_break()
-
-            self._create_toc()
+            
+            self._update_header_footer()
+            self._create_toc(formatting_options)
             self._create_assembly_section(self.data)
             self._replace_graphic_placeholders()
+            self._insert_blank_pages(formatting_options)
+            self._create_cover_sheet(formatting_options)
+
             self.doc.save(self.output_path)
 
             if self.auto_update_fields:
@@ -87,7 +88,10 @@ class DocxGenerator:
             # Das Dokument wird jetzt direkt geöffnet. Der "Säuberungs"-Schritt
             # ist für .docx-Dateien nicht notwendig.
             doc = word.Documents.Open(abs_path)
-            
+
+            print("  -> Aktualisiere alle Dokumenten-Felder (z.B. Seitenzahlen)...")
+            doc.Fields.Update()
+
             print("  -> Aktualisiere Inhaltsverzeichnis...")
             if doc.TablesOfContents.Count > 0:
                 doc.TablesOfContents(1).Update()
@@ -139,12 +143,12 @@ class DocxGenerator:
         table_styles = self.config.config.get("table_styles", {})
         base_style = table_styles.get("base_style", "Table Grid")
         header_bold = table_styles.get("header_bold", True)
+        header_font_color_hex = table_styles.get("header_font_color")
         header_shading_color = table_styles.get("header_shading_color", "4F81BD")
         shading_enabled = table_styles.get("shading_enabled", True)
         shading_color = table_styles.get("shading_color", "DAE9F8")
 
-        headers = [col["header"] for col in output_columns]
-        table = self.doc.add_table(rows=1, cols=len(headers))
+        table = self.doc.add_table(rows=1, cols=len(output_columns))
         table.style = base_style
         table.width = Cm(16.5)
         table.autofit = False
@@ -155,11 +159,18 @@ class DocxGenerator:
         trPr = tr.get_or_add_trPr()
         tblHeader = OxmlElement("w:tblHeader")
         trPr.append(tblHeader)
-        for i, header_text in enumerate(headers):
+        for i, col_config in enumerate(output_columns):
             cell = hdr_cells[i]
-            cell.text = header_text
+            cell.text = col_config.get("header", "")
+            
+            run = cell.paragraphs[0].runs[0]
             if header_bold:
-                cell.paragraphs[0].runs[0].font.bold = True
+                run.font.bold = True
+            if header_font_color_hex:
+                try:
+                    run.font.color.rgb = RGBColor.from_string(header_font_color_hex)
+                except ValueError:
+                    print(f"WARNUNG: Ungültiger Hex-Code für Header-Schriftfarbe: '{header_font_color_hex}'")
 
             if header_shading_color:
                 self._set_cell_shading(cell, header_shading_color)
@@ -212,33 +223,74 @@ class DocxGenerator:
                     row.cells[i].width = col_width
                 table.columns[i].width = col_width
 
-    def _create_cover_sheet(self):
-        p_title = self.doc.add_paragraph()
+    def _create_cover_sheet(self, formatting_options: dict):
+        """Erstellt das Deckblatt, entweder Standard oder aus externer Datei."""
+        cover_type = formatting_options.get("cover_sheet_type", "default")
+        cover_path = formatting_options.get("cover_sheet_path", "")
+
+        if cover_type == "external_docx" and os.path.exists(cover_path):
+            print(f"INFO: Füge externes Deckblatt ein aus: {cover_path}")
+            self._insert_docx_content(cover_path)
+        else:
+            self._create_default_cover_sheet()
+        
+        p = self.doc.add_paragraph()
+        run = p.add_run()
+        run.add_break(WD_BREAK.PAGE)
+        self.doc.element.body.insert(0, p._p)
+        self.doc.element.body.remove(p._p)
+
+    def _insert_blank_pages(self, formatting_options: dict):
+        """Fügt leere oder externe Seiten vor dem Inhaltsverzeichnis ein."""
+        pages_type = formatting_options.get("blank_pages_type", "blank")
+        pages_path = formatting_options.get("blank_pages_path", "")
+        num_pages = formatting_options.get("blank_pages_before_toc", 0)
+
+        if pages_type == "external_docx" and os.path.exists(pages_path):
+            print(f"INFO: Füge externe Seite(n) ein aus: {pages_path}")
+            self._insert_docx_content(pages_path)
+        else:
+            # Füge leere Seiten durch Seitenumbrüche am Anfang ein
+            for _ in range(num_pages):
+                p = self.doc.add_paragraph()
+                run = p.add_run()
+                run.add_break(WD_BREAK.PAGE)
+                self.doc.element.body.insert(0, p._p)
+                self.doc.element.body.remove(p._p)
+
+    def _create_default_cover_sheet(self):
+        elements = []
+        temp_doc = Document()
+        
+        p_title = temp_doc.add_paragraph()
         p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run_title = p_title.add_run(self.main_bom.titel or "[TITEL]")
-        font_title = run_title.font
-        font_title.name = 'Calibri'
-        font_title.size = Cm(1.5)
-        font_title.bold = True
+        font_title = run_title.font; font_title.name = 'Calibri'; font_title.size = Cm(1.5); font_title.bold = True
+        elements.append(p_title._p)
         
-        p_line = self.doc.add_paragraph("_________________________________________________")
+        p_line = temp_doc.add_paragraph("_________________________________________________")
         p_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        elements.append(p_line._p)
         
-        p_subject = self.doc.add_paragraph()
+        p_subject = temp_doc.add_paragraph()
         p_subject.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run_subject = p_subject.add_run("Ersatzteilkatalog")
-        run_subject.font.size = Cm(0.8)
+        run_subject = p_subject.add_run("Ersatzteilkatalog"); run_subject.font.size = Cm(0.8)
+        elements.append(p_subject._p)
         
-        p_grafik = self.doc.add_paragraph()
+        p_grafik = temp_doc.add_paragraph()
         p_grafik.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
         image_path = next((os.path.join(self.project_path, "Grafik", f"EL{ext}") for ext in ['.png', '.jpg'] if os.path.exists(os.path.join(self.project_path, "Grafik", f"EL{ext}"))), None)
         if image_path:
             self._add_scaled_picture(p_grafik, image_path, Cm(16), Cm(15))
-        
-        self.doc.add_page_break()
+        elements.append(p_grafik._p)
 
-    def _create_toc(self):
+        # Füge die Elemente in umgekehrter Reihenfolge am Anfang des Hauptdokuments ein
+        for element in reversed(elements):
+            self.doc.element.body.insert(0, element)
+
+    def _create_toc(self, formatting_options: dict):
+        if formatting_options.get("toc_on_new_page", True):
+            self.doc.add_page_break()
         self.doc.add_heading("Inhaltsverzeichnis", level=1)
         paragraph = self.doc.add_paragraph()
         run = paragraph.add_run()
@@ -276,8 +328,12 @@ class DocxGenerator:
                     p.add_run("[Keine Grafik zugeordnet]").italic = True
 
     def _update_header_footer(self):
+        if self.custom_doc_number:
+            full_zeich_nr = self.custom_doc_number
+        else:
+            full_zeich_nr = f"{self.main_bom.kundennummer or self.main_bom.zeichnungsnummer or ''} (EL)"
+            
         full_title = f"{self.main_bom.titel or ''} - {self.main_bom.zusatzbenennung or ''}".strip(' -')
-        full_zeich_nr = f"{self.main_bom.kundennummer or self.main_bom.zeichnungsnummer or ''} (EL)"
         creation_date = datetime.date.today().strftime('%d.%m.%Y')
         replacements = {'[TITEL]': full_title, '[THEMA]': "Ersatzteilkatalog", '[ZEICH]': full_zeich_nr, '[VERWEND]': self.main_bom.verwendung or "", '[AUTOR]': self.author_name, '[EDATUM]': creation_date}
         
@@ -353,3 +409,16 @@ class DocxGenerator:
         shd.set(qn('w:val'), 'clear')
         shd.set(qn('w:fill'), fill_color)
         tc_pr.append(shd)
+
+    def _insert_docx_content(self, docx_path):
+        """Fügt den Inhalt eines anderen DOCX-Dokuments am Anfang des Hauptdokuments ein."""
+        try:
+            source_doc = Document(docx_path)
+            for element in reversed(source_doc.element.body):
+                self.doc.element.body.insert(0, element)
+        except Exception as e:
+            print(f"FEHLER beim Einfügen von '{docx_path}': {e}")
+            p = self.doc.add_paragraph(f"[Fehler: Inhalt aus '{os.path.basename(docx_path)}' konnte nicht geladen werden.]")
+            # Diesen temporären Paragraphen an den Anfang verschieben und den am Ende erstellten löschen
+            self.doc.element.body.insert(0, p._p)
+            self.doc.element.body.remove(p._p)

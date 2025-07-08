@@ -55,7 +55,7 @@ class ConfigManager:
                 {"id": "std_benennung", "header": "Benennung", "width_percent": 30, "source_id": "Benennung_Formatiert", "type": "standard"},
                 {"id": "std_bestellnr", "header": "Bestellnummer", "width_percent": 22, "source_id": "Bestellnummer_Kunde", "type": "standard"},
                 {"id": "std_info", "header": "Information", "width_percent": 22, "source_id": "Information", "type": "standard"},
-                {"id": "std_seite", "header": "Seite", "width_percent": 8, "source_id": "Seite", "type": "standard"}
+                {"id": "std_seite", "header": "Seite", "width_percent": 8, "source_id": "Seite", "type": "standard"},
             ],
             "generation_rules": {
                 # Standardregel für die Benennung: Kombiniert zwei Felder mit Zeilenumbruch
@@ -74,6 +74,7 @@ class ConfigManager:
             "table_styles": {
               "base_style": "Table Grid",
               "header_bold": True,
+              "header_font_color": "FFFFFF",
               "header_shading_color": "4F81BD",
               "shading_enabled": True,
               "shading_color": "DAE9F8"
@@ -82,7 +83,12 @@ class ConfigManager:
                 "assembly_title_format": "{benennung} ({teilenummer})",
                 "add_space_after_title": True,
                 "table_on_new_page": False,
-                "blank_pages_before_toc": 0  # NEU
+                "blank_pages_before_toc": 0,
+                "cover_sheet_type": "default",
+                "cover_sheet_path": "",
+                "blank_pages_type": "blank",
+                "blank_pages_path": "",
+                "toc_on_new_page": True
             }
 
         }
@@ -128,7 +134,7 @@ class ConfigManager:
             # Speichere die ggf. ergänzte Konfiguration zurück
                 elif isinstance(value, dict):
                     for sub_key, sub_value in value.items():
-                        if sub_key not in loaded_config[key]:
+                        if sub_key not in loaded_config.get(key, {}):
                             loaded_config[key][sub_key] = sub_value
                             is_dirty = True
 
