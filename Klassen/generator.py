@@ -231,6 +231,10 @@ class DocxGenerator:
         if cover_type == "external_docx" and os.path.exists(cover_path):
             print(f"INFO: Füge externes Deckblatt ein aus: {cover_path}")
             self._insert_docx_content(cover_path)
+
+            p = self.doc.add_paragraph()
+            run = p.add_run()
+            run.add_break(WD_BREAK.PAGE)
         else:
             self._create_default_cover_sheet()
         
@@ -252,11 +256,13 @@ class DocxGenerator:
         else:
             # Füge leere Seiten durch Seitenumbrüche am Anfang ein
             for _ in range(num_pages):
-                p = self.doc.add_paragraph()
-                run = p.add_run()
-                run.add_break(WD_BREAK.PAGE)
-                self.doc.element.body.insert(0, p._p)
-                self.doc.element.body.remove(p._p)
+                p_element = OxmlElement("w:p")
+                r_element = OxmlElement("w:r")
+                br_element = OxmlElement("w:br")
+                br_element.set(qn("w:type"), "page")
+                r_element.append(br_element)
+                p_element.append(r_element)
+                self.doc.element.body.insert(0, p_element)
 
     def _create_default_cover_sheet(self):
         elements = []
@@ -323,7 +329,7 @@ class DocxGenerator:
                 image_path = next((os.path.join(grafik_folder, f"{znr}{ext}") for ext in ['.png', '.jpg', '.jpeg'] if os.path.exists(os.path.join(grafik_folder, f"{znr}{ext}"))), None)
                 p.clear() 
                 if image_path:
-                    self._add_scaled_picture(p, image_path, Cm(16), Cm(20))
+                    self._add_scaled_picture(p, image_path, Cm(16), Cm(19))
                 else:
                     p.add_run("[Keine Grafik zugeordnet]").italic = True
 
@@ -415,6 +421,8 @@ class DocxGenerator:
         try:
             source_doc = Document(docx_path)
             for element in reversed(source_doc.element.body):
+                if element.tag.endswith('sectPr'):
+                    continue
                 self.doc.element.body.insert(0, element)
         except Exception as e:
             print(f"FEHLER beim Einfügen von '{docx_path}': {e}")

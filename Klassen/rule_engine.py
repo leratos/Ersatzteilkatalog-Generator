@@ -29,11 +29,9 @@ class RuleEngine:
         Wendet alle definierten Regeln in der korrekten, abhängigkeitsbasierten
         Reihenfolge auf eine einzelne Datenzeile an.
         """
-        if not self.sorted_rules: # Falls ein Fehler aufgetreten ist (z.B. Zirkelbezug)
+        if not self.sorted_rules:
             return {}
 
-        # Wir arbeiten auf einer Kopie, um die generierten Werte für
-        # nachfolgende Regeln verfügbar zu machen.
         local_row_data = row_data.copy()
         generated_data = {}
 
@@ -49,10 +47,17 @@ class RuleEngine:
             elif rule_type == "conditional":
                 result = self._apply_conditional(rule, local_row_data)
             
+            elif rule_type == "find_replace":  # NEU
+                result = self._apply_find_replace(rule, local_row_data)
+            else:
+                print(
+                    f"WARNUNG: Unbekannter Regel-Typ '{rule_type}' "
+                    f"für das Feld '{target_field}'."
+                )
+
             generated_data[target_field] = result
-            # WICHTIG: Mache das Ergebnis für die nächste Regel verfügbar!
             local_row_data[target_field] = result
-            
+
         return generated_data
 
     def _get_execution_order(self) -> list:
@@ -67,12 +72,15 @@ class RuleEngine:
         # 2. Graphen aufbauen
         for target_field, rule in self.rules.items():
             sources = []
-            if rule.get("type") in ["prioritized_list", "combine"]:
+            rule_type = rule.get("type")
+            if rule_type in ["prioritized_list", "combine"]:
                 sources = rule.get("sources", [])
-            elif rule.get("type") == "conditional":
+            elif rule_type == "conditional":
                 sources.append(rule.get("if", {}).get("source"))
                 sources.append(rule.get("then", {}).get("source"))
                 sources.append(rule.get("else", {}).get("source"))
+            elif rule_type == "find_replace":
+                sources.append(rule.get("source"))
 
             for source in filter(None, sources):
                 # Wenn eine Quelle selbst eine Regel ist, füge eine Kante hinzu
@@ -108,26 +116,49 @@ class RuleEngine:
     def _apply_prioritized_list(self, rule: dict, row_data: dict) -> str:
         for source_field in rule.get("sources", []):
             value = row_data.get(source_field)
-            if value and pd.notna(value): return str(value).strip()
+            if value and pd.notna(value):
+                return str(value).strip()
         return ""
 
     def _apply_combine(self, rule: dict, row_data: dict) -> str:
         parts = []
         for source_field in rule.get("sources", []):
             value = row_data.get(source_field)
-            if value and pd.notna(value): parts.append(str(value).strip())
+            if value and pd.notna(value):
+                parts.append(str(value).strip())
         separator = rule.get("separator", " ").replace("\\n", "\n")
         return separator.join(parts)
 
     def _apply_conditional(self, rule: dict, row_data: dict) -> str:
-        if_clause = rule.get("if", {}); then_clause = rule.get("then", {}); else_clause = rule.get("else", {})
+        if_clause = rule.get("if", {})
+        then_clause = rule.get("then", {})
+        else_clause = rule.get("else", {})
         source_value = str(row_data.get(if_clause.get("source"), "")).strip()
-        condition_met = self._evaluate_condition(source_value, if_clause.get("operator"), if_clause.get("value", ""))
+        condition_met = self._evaluate_condition(
+            source_value, if_clause.get("operator"), if_clause.get("value", "")
+        )
         result_source = then_clause.get("source") if condition_met else else_clause.get("source")
         final_value = row_data.get(result_source)
         return str(final_value).strip() if final_value and pd.notna(final_value) else ""
 
-    def _evaluate_condition(self, source_value: str, operator: str, compare_value: str) -> bool:
+    def _apply_find_replace(self, rule: dict, row_data: dict) -> str:
+        """
+        NEUE REGEL 'Suchen & Ersetzen': Ersetzt einen Text in einem Quellfeld.
+        """
+        source_field = rule.get("source")
+        find_text = rule.get("find_text", "")
+        replace_text = rule.get("replace_text", "")
+
+        original_value = str(row_data.get(source_field, "")).strip()
+
+        if not find_text:
+            return original_value
+
+        return original_value.replace(find_text, replace_text)
+
+    def _evaluate_condition(
+        self, source_value: str, operator: str, compare_value: str
+    ) -> bool:
         if operator == "is_empty": return not source_value
         if operator == "is_not_empty": return bool(source_value)
         compare_list = [v.strip() for v in compare_value.split(';')]

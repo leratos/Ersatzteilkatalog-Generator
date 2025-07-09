@@ -35,6 +35,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             "Priorisierte Liste": "prioritized_list",
             "Werte kombinieren": "combine",
             "Bedingte Zuweisung": "conditional",
+            "Suchen & Ersetzen": "find_replace",
         }
         self.operator_map = {
             "ist gleich": "is",
@@ -48,6 +49,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.setMinimumSize(950, 750)
         self._setup_ui()
         self._connect_signals()
+        self._populate_conditional_combos()
         self._populate_target_fields_list()
 
         self._load_design_settings()
@@ -313,6 +315,7 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.rule_stack.addWidget(self._create_list_based_ui("prio"))
         self.rule_stack.addWidget(self._create_combine_ui())
         self.rule_stack.addWidget(self._create_conditional_ui())
+        self.rule_stack.addWidget(self._create_find_replace_ui())
 
     def _create_list_based_ui(self, rule_prefix: str) -> QtWidgets.QWidget:
         """Erstellt UI für 'Priorisierte Liste' und 'Werte kombinieren'."""
@@ -385,6 +388,21 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         form_layout.addRow("    Nimm Wert aus Feld:", self.else_source_combo)
 
         self._populate_conditional_combos()
+        return widget
+
+    def _create_find_replace_ui(self) -> QtWidgets.QWidget:
+        """Erstellt die UI für 'Suchen & Ersetzen'."""
+        widget = QtWidgets.QWidget()
+        form_layout = QtWidgets.QFormLayout(widget)
+        form_layout.setContentsMargins(10, 10, 10, 10)
+        form_layout.setSpacing(10)
+        form_layout.addRow(QtWidgets.QLabel("<b>Funktion:</b> Sucht in einem Quellfeld nach einem Text und ersetzt ihn."))
+        self.replace_source_combo = QtWidgets.QComboBox()
+        form_layout.addRow("Quell-Feld:", self.replace_source_combo)
+        self.find_text_input = QtWidgets.QLineEdit()
+        form_layout.addRow("Suchen nach:", self.find_text_input)
+        self.replace_text_input = QtWidgets.QLineEdit()
+        form_layout.addRow("Ersetzen durch:", self.replace_text_input)
         return widget
 
     # --------------------------------------------------------------------------
@@ -474,6 +492,10 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             self.if_value_input.setText(if_clause.get("value", ""))
             self.then_source_combo.setCurrentText(then_clause.get("source", ""))
             self.else_source_combo.setCurrentText(else_clause.get("source", ""))
+        elif rule_type_key == "find_replace":
+            self.replace_source_combo.setCurrentText(rule.get("source", ""))
+            self.find_text_input.setText(rule.get("find_text", ""))
+            self.replace_text_input.setText(rule.get("replace_text", ""))
 
     def _save_current_rule_state(self, target_field: str):
         """Liest die UI-Werte aus und speichert sie in self.current_rules."""
@@ -495,7 +517,11 @@ class ConfigEditorWindow(QtWidgets.QDialog):
             new_rule["if"] = {"source": self.if_source_combo.currentText(), "operator": operator_key, "value": self.if_value_input.text()}
             new_rule["then"] = {"source": self.then_source_combo.currentText()}
             new_rule["else"] = {"source": self.else_source_combo.currentText()}
-            
+        elif rule_type_key == "find_replace":
+            new_rule["source"] = self.replace_source_combo.currentText()
+            new_rule["find_text"] = self.find_text_input.text()
+            new_rule["replace_text"] = self.replace_text_input.text()
+
         self.current_rules[target_field] = new_rule
 
     def accept(self):
@@ -702,7 +728,10 @@ class ConfigEditorWindow(QtWidgets.QDialog):
         self.then_source_combo.addItems(available_sources)
         self.else_source_combo.clear()
         self.else_source_combo.addItems(available_sources)
-            
+
+        if hasattr(self, "replace_source_combo"):
+                self.replace_source_combo.clear()
+                self.replace_source_combo.addItems(available_sources)
 
     def _create_column_comboboxes(self):
         """Erstellt oder aktualisiert die Dropdowns für die Spaltenzuordnung."""
